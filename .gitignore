@@ -1,0 +1,7 @@
+*.exe
+*.log
+.env
+.localappdata/
+node_modules/
+pet-state.json
+assets/pikachu.png
