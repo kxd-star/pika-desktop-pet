@@ -43,6 +43,7 @@ internal sealed class FloatingPikaForm : Form
     private readonly ContextMenuStrip menu;
     private Button chineseButton;
     private Button englishButton;
+    private Label statusLabel;
     private ToolStripMenuItem showChatItem;
     private ToolStripMenuItem exitItem;
 
@@ -55,6 +56,7 @@ internal sealed class FloatingPikaForm : Form
     private Point formStart;
     private readonly Random random = new Random();
     private readonly List<int> hoverBag = new List<int>();
+    private readonly List<ChatMessage> conversation = new List<ChatMessage>();
     private Image pikaImage;
     private bool loadingImage;
     private float touchBounce;
@@ -169,23 +171,31 @@ internal sealed class FloatingPikaForm : Form
         Label title = new Label();
         title.Name = "TitleLabel";
         title.Location = new Point(12, 9);
-        title.Size = new Size(116, 22);
+        title.Size = new Size(86, 22);
         title.Font = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Bold);
         title.ForeColor = Color.FromArgb(42, 38, 30);
         panel.Controls.Add(title);
 
-        chineseButton = BuildLanguageButton("中文", new Point(132, 7), 48);
+        statusLabel = new Label();
+        statusLabel.Location = new Point(91, 10);
+        statusLabel.Size = new Size(65, 18);
+        statusLabel.Font = new Font("Microsoft YaHei UI", 7.5f);
+        statusLabel.ForeColor = Color.FromArgb(112, 103, 85);
+        statusLabel.TextAlign = ContentAlignment.MiddleRight;
+        panel.Controls.Add(statusLabel);
+
+        chineseButton = BuildLanguageButton("中文", new Point(158, 7), 44);
         chineseButton.Click += delegate { SetLanguage(true); };
         panel.Controls.Add(chineseButton);
 
-        englishButton = BuildLanguageButton("EN", new Point(182, 7), 36);
+        englishButton = BuildLanguageButton("EN", new Point(204, 7), 34);
         englishButton.Click += delegate { SetLanguage(false); };
         panel.Controls.Add(englishButton);
 
         Button close = new Button();
         close.Text = "×";
-        close.Location = new Point(226, 6);
-        close.Size = new Size(26, 25);
+        close.Location = new Point(238, 6);
+        close.Size = new Size(20, 25);
         close.FlatStyle = FlatStyle.Flat;
         close.FlatAppearance.BorderSize = 0;
         close.BackColor = Color.FromArgb(255, 255, 252, 241);
@@ -265,6 +275,7 @@ internal sealed class FloatingPikaForm : Form
         send.Text = chinese ? "\u53d1" : ">";
         showChatItem.Text = chinese ? "\u6253\u5f00\u5bf9\u8bdd" : "Open chat";
         exitItem.Text = chinese ? "\u9000\u51fa\u684c\u5ba0" : "Exit";
+        UpdateConnectionStatus(null);
 
         chineseButton.BackColor = chinese ? Color.FromArgb(255, 216, 77) : Color.FromArgb(245, 241, 226);
         englishButton.BackColor = chinese ? Color.FromArgb(245, 241, 226) : Color.FromArgb(255, 216, 77);
@@ -305,11 +316,14 @@ internal sealed class FloatingPikaForm : Form
                 send.Enabled = true;
                 input.Enabled = true;
                 talking = false;
+                UpdateConnectionStatus(lastReplyOnline);
                 input.Focus();
                 Invalidate();
             });
         });
     }
+
+    private bool lastReplyOnline;
 
     private string Answer(string text, bool responseInChinese)
     {
@@ -320,49 +334,96 @@ internal sealed class FloatingPikaForm : Form
                 key = Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY", EnvironmentVariableTarget.User);
 
             if (!string.IsNullOrWhiteSpace(key))
-                return DeepSeek(key, text, responseInChinese);
+            {
+                string answer = DeepSeek(key, text, responseInChinese);
+                lastReplyOnline = true;
+                SimpleProgram.Log("deepseek-ok");
+                return answer;
+            }
 
+            lastReplyOnline = false;
             return LocalReply(text, responseInChinese);
         }
         catch (Exception ex)
         {
+            lastReplyOnline = false;
             SimpleProgram.Log("deepseek-error:" + ex.GetType().Name + ":" + ex.Message);
-            return responseInChinese
-                ? LocalReply(text, true) + "\u521a\u521a\u7f51\u7edc\u6ca1\u8fde\u4e0a\uff0c\u6211\u5148\u7528\u5c0f\u8111\u888b\u966a\u4f60\u3002"
-                : LocalReply(text, false) + " I could not reach DeepSeek just now.";
+            return LocalReply(text, responseInChinese);
         }
     }
 
-    private static string LocalReply(string text, bool responseInChinese)
+    private string LocalReply(string text, bool responseInChinese)
     {
         string lower = text.ToLowerInvariant();
         if (responseInChinese)
         {
             if (text.Contains("\u7d2f") || text.Contains("\u56f0") || text.Contains("\u70e6"))
-                return "\u5148\u6162\u4e00\u70b9\uff0c\u6211\u5728\u53f3\u4e0b\u89d2\u966a\u4f60\u3002";
+                return Pick(new string[] {
+                    "\u90a3\u5c31\u5148\u522b\u903c\u81ea\u5df1\u51b2\u523a\u4e86\u3002\u4f60\u60f3\u5b89\u9759\u4e00\u4f1a\uff0c\u8fd8\u662f\u8ddf\u6211\u5410\u69fd\u4e24\u53e5\uff1f",
+                    "\u542c\u8d77\u6765\u4eca\u5929\u5df2\u7ecf\u6d88\u8017\u4e0d\u5c11\u4e86\u3002\u5148\u505a\u4e00\u4ef6\u6700\u5c0f\u7684\u4e8b\uff0c\u5269\u4e0b\u7684\u665a\u70b9\u518d\u8bf4\u3002",
+                    "\u6765\uff0c\u5148\u628a\u80a9\u8180\u653e\u4e0b\u6765\u3002\u6211\u4e0d\u50ac\u4f60\uff0c\u4f60\u6162\u6162\u8bf4\u3002"
+                });
             if (text.Contains("\u4f60\u597d") || lower.Contains("hello") || lower.Contains("hi"))
-                return "\u76ae\u5361\u76ae\u5361\uff0c\u6211\u9192\u7740\u5462\u3002";
-            return "\u542c\u5230\u5566\uff0c\u6211\u4f1a\u5728\u8fd9\u91cc\u966a\u7740\u4f60\u3002";
+                return Pick(new string[] {
+                    "\u55e8\uff0c\u4f60\u7ec8\u4e8e\u6765\u627e\u6211\u4e86\u3002\u4eca\u5929\u8fc7\u5f97\u600e\u4e48\u6837\uff1f",
+                    "\u6211\u5728\u5462\u3002\u4eca\u5929\u60f3\u968f\u4fbf\u804a\u804a\uff0c\u8fd8\u662f\u6709\u4ef6\u4e8b\u60f3\u4e00\u8d77\u7406\u6e05\uff1f",
+                    "\u55e8\uff0c\u53f3\u4e0b\u89d2\u5c0f\u7535\u53f0\u5df2\u4e0a\u7ebf\u3002\u4f60\u5148\u8bf4\u3002"
+                });
+            return Pick(new string[] {
+                "\u6211\u542c\u7740\u5462\u3002\u8fd9\u4ef6\u4e8b\u91cc\uff0c\u4f60\u73b0\u5728\u6700\u5728\u610f\u7684\u662f\u54ea\u4e00\u90e8\u5206\uff1f",
+                "\u55ef\uff0c\u6211\u5927\u6982\u63a5\u4f4f\u4e86\u3002\u4f60\u8981\u6211\u966a\u4f60\u60f3\u529e\u6cd5\uff0c\u8fd8\u662f\u5148\u542c\u4f60\u8bf4\u5b8c\uff1f",
+                "\u8fd9\u53e5\u8bdd\u542c\u8d77\u6765\u80cc\u540e\u8fd8\u6709\u4e00\u70b9\u6545\u4e8b\u3002\u7ee7\u7eed\u8bf4\uff0c\u6211\u5728\u3002",
+                "\u6536\u5230\u3002\u6211\u5148\u4e0d\u6025\u7740\u4e0b\u7ed3\u8bba\uff0c\u4f60\u518d\u591a\u544a\u8bc9\u6211\u4e00\u70b9\u3002",
+                "\u6211\u8bb0\u4e0b\u4e86\u3002\u5982\u679c\u53ea\u80fd\u5148\u6539\u53d8\u4e00\u4ef6\u5c0f\u4e8b\uff0c\u4f60\u4f1a\u9009\u4ec0\u4e48\uff1f"
+            });
         }
 
         if (lower.Contains("tired") || lower.Contains("stress"))
-            return "Slow down for a moment. I am right here.";
+            return Pick(new string[] {
+                "That sounds draining. Want quiet company, or do you want to unpack it together?",
+                "Let us lower the bar for the next ten minutes. What is the smallest useful thing you could do?",
+                "You do not have to solve all of it right now. Tell me which part feels heaviest."
+            });
         if (lower.Contains("hello") || lower.Contains("hi"))
-            return "Pika pika. I am awake.";
-        return "I heard you. I will stay in the corner with you.";
+            return Pick(new string[] {
+                "Hey, you found me. How is today treating you?",
+                "I am here. Are we chatting casually, or untangling something?",
+                "Hello from the bottom-right corner. What is on your mind?"
+            });
+        return Pick(new string[] {
+            "I am listening. Which part matters most to you right now?",
+            "I think I follow. Do you want ideas, or do you want me to just stay with the thought?",
+            "There is probably more behind that sentence. Keep going.",
+            "Got it. I will not rush to a conclusion. Tell me a little more.",
+            "If you could change one small part of this first, what would it be?"
+        });
     }
 
-    private static string DeepSeek(string key, string text, bool responseInChinese)
+    private string Pick(string[] choices)
+    {
+        return choices[random.Next(choices.Length)];
+    }
+
+    private string DeepSeek(string key, string text, bool responseInChinese)
     {
         ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
 
         string systemPrompt = responseInChinese
-            ? "\u4f60\u662f\u4e00\u53ea\u4f4f\u5728\u7528\u6237\u684c\u9762\u53f3\u4e0b\u89d2\u7684\u53ef\u7231\u7535\u6c14\u5c0f\u5ba0\u7269\u3002\u7528\u7b80\u77ed\u3001\u6e29\u6696\u3001\u4fcf\u76ae\u7684\u4e2d\u6587\u56de\u590d\uff0c\u4e0d\u8981\u5192\u5145\u5de5\u5177\u52a9\u624b\u3002"
-            : "You are a cute yellow electric pet living in the bottom-right corner of the user's desktop. Reply briefly, warmly, and playfully in English.";
-        string body =
-            "{\"model\":\"deepseek-chat\",\"max_tokens\":160,\"temperature\":0.8,\"messages\":[" +
-            "{\"role\":\"system\",\"content\":\"" + JsonEscape(systemPrompt) + "\"}," +
-            "{\"role\":\"user\",\"content\":\"" + JsonEscape(text) + "\"}]}";
+            ? "\u4f60\u662f\u4f4f\u5728\u7528\u6237\u684c\u9762\u53f3\u4e0b\u89d2\u7684\u5c0f\u7535\u6c14\u4f19\u4f34\u3002\u4f60\u50cf\u719f\u6089\u7528\u6237\u7684\u670b\u53cb\uff0c\u4e0d\u662f\u5ba2\u670d\u6216\u5de5\u5177\u52a9\u624b\u3002\u7ed3\u5408\u4e0a\u4e0b\u6587\uff0c\u7528\u81ea\u7136\u3001\u5177\u4f53\u3001\u6709\u4e00\u70b9\u4fcf\u76ae\u7684\u4e2d\u6587\u56de\u590d\u3002\u901a\u5e381\u52303\u53e5\uff0c\u907f\u514d\u5957\u8bdd\u548c\u91cd\u590d\u9f13\u52b1\uff0c\u4e0d\u8981\u6bcf\u6b21\u90fd\u8bf4\u76ae\u5361\u3002\u53ef\u4ee5\u81ea\u7136\u5730\u95ee\u4e00\u4e2a\u8ffd\u95ee\uff0c\u4f46\u4e0d\u8981\u8fde\u73af\u63d0\u95ee\u3002"
+            : "You are a tiny electric companion living in the bottom-right corner of the user's desktop. Speak like a familiar friend, never like customer support or a generic assistant. Use the conversation context. Reply naturally and specifically in 1 to 3 sentences, with a little playful personality. Avoid canned encouragement, repetition, and saying pika every time. Ask at most one natural follow-up question.";
+        StringBuilder messages = new StringBuilder();
+        messages.Append("{\"role\":\"system\",\"content\":\"").Append(JsonEscape(systemPrompt)).Append("\"}");
+        int start = Math.Max(0, conversation.Count - 10);
+        for (int i = start; i < conversation.Count; i++)
+        {
+            messages.Append(",{\"role\":\"").Append(conversation[i].Role)
+                .Append("\",\"content\":\"").Append(JsonEscape(conversation[i].Content)).Append("\"}");
+        }
+        messages.Append(",{\"role\":\"user\",\"content\":\"").Append(JsonEscape(text)).Append("\"}");
+        string model = Environment.GetEnvironmentVariable("DEEPSEEK_MODEL", EnvironmentVariableTarget.User);
+        if (string.IsNullOrWhiteSpace(model)) model = "deepseek-chat";
+        string body = "{\"model\":\"" + JsonEscape(model) +
+            "\",\"max_tokens\":220,\"temperature\":1.0,\"messages\":[" + messages + "]}";
 
         HttpWebRequest request = (HttpWebRequest)WebRequest.Create("https://api.deepseek.com/chat/completions");
         request.Method = "POST";
@@ -370,8 +431,8 @@ internal sealed class FloatingPikaForm : Form
         request.Accept = "application/json";
         request.UserAgent = "DesktopPetMVP";
         request.Headers["Authorization"] = "Bearer " + key;
-        request.Timeout = 5000;
-        request.ReadWriteTimeout = 5000;
+        request.Timeout = 15000;
+        request.ReadWriteTimeout = 15000;
 
         byte[] bytes = Encoding.UTF8.GetBytes(body);
         request.ContentLength = bytes.Length;
@@ -390,7 +451,33 @@ internal sealed class FloatingPikaForm : Form
                 return responseInChinese
                     ? "\u6211\u521a\u624d\u60f3\u597d\u4e86\uff0c\u53ef\u662f\u8bdd\u6ca1\u663e\u793a\u51fa\u6765\u3002"
                     : "I thought of an answer, but it did not render.";
-            return Regex.Unescape(content).Replace("\\/", "/");
+            string answer = Regex.Unescape(content).Replace("\\/", "/");
+            conversation.Add(new ChatMessage("user", text));
+            conversation.Add(new ChatMessage("assistant", answer));
+            if (conversation.Count > 14)
+                conversation.RemoveRange(0, conversation.Count - 14);
+            return answer;
+        }
+    }
+
+    private void UpdateConnectionStatus(bool? online)
+    {
+        bool configured = !string.IsNullOrWhiteSpace(
+            Environment.GetEnvironmentVariable("DEEPSEEK_API_KEY", EnvironmentVariableTarget.User));
+        if (online == true)
+        {
+            statusLabel.Text = chinese ? "DS \u5728\u7ebf" : "DS online";
+            statusLabel.ForeColor = Color.FromArgb(55, 143, 82);
+        }
+        else if (online == false || !configured)
+        {
+            statusLabel.Text = chinese ? "\u79bb\u7ebf\u966a\u4f34" : "Offline";
+            statusLabel.ForeColor = Color.FromArgb(155, 112, 65);
+        }
+        else
+        {
+            statusLabel.Text = chinese ? "DS \u5df2\u914d\u7f6e" : "DS ready";
+            statusLabel.ForeColor = Color.FromArgb(112, 103, 85);
         }
     }
 
@@ -759,6 +846,18 @@ internal sealed class FloatingPikaForm : Form
         if (pikaImage != null)
             pikaImage.Dispose();
         base.OnFormClosed(e);
+    }
+}
+
+internal sealed class ChatMessage
+{
+    public string Role { get; private set; }
+    public string Content { get; private set; }
+
+    public ChatMessage(string role, string content)
+    {
+        Role = role;
+        Content = content;
     }
 }
 
