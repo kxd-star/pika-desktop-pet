@@ -8,6 +8,8 @@ The application can optionally load Pikachu artwork from the PokéAPI sprites re
 
 - Repository: https://github.com/PokeAPI/sprites
 - Runtime asset URL: https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/25.png
+- Pokémon Showdown animated sprite: https://play.pokemonshowdown.com/sprites/ani/pikachu.gif
+- Pokémon Database sprite gallery: https://pokemondb.net/sprites/pikachu
 
 No ownership of those assets is claimed by this project.
 

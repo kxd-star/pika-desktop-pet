@@ -4,4 +4,7 @@
 .localappdata/
 node_modules/
 pet-state.json
+chat-history.txt
 assets/pikachu.png
+assets/pikachu.gif
+desktop-pet-preview.png

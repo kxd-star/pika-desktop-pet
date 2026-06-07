@@ -33,10 +33,20 @@ internal static class SimpleProgram
     }
 }
 
+internal enum PetMood
+{
+    Idle,
+    Happy,
+    Touch,
+    Thinking,
+    Talking,
+    Sleepy
+}
+
 internal sealed class FloatingPikaForm : Form
 {
     private Panel bubble;
-    private Label reply;
+    private FlowLayoutPanel historyPanel;
     private TextBox input;
     private Button send;
     private readonly Timer timer;
@@ -52,6 +62,9 @@ internal sealed class FloatingPikaForm : Form
     private bool petHovering;
     private bool talking;
     private bool chinese = true;
+    private PetMood mood = PetMood.Idle;
+    private DateTime moodUntil = DateTime.MinValue;
+    private DateTime lastInteraction = DateTime.Now;
     private Point dragStart;
     private Point formStart;
     private readonly Random random = new Random();
@@ -66,14 +79,14 @@ internal sealed class FloatingPikaForm : Form
 
     private Rectangle PetRect
     {
-        get { return new Rectangle(45, 202, 180, 145); }
+        get { return new Rectangle(70, 342, 180, 145); }
     }
 
     public FloatingPikaForm()
     {
         Text = "DesktopPetMVP";
-        Width = 270;
-        Height = 360;
+        Width = 320;
+        Height = 500;
         StartPosition = FormStartPosition.Manual;
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
@@ -105,11 +118,15 @@ internal sealed class FloatingPikaForm : Form
         {
             tick += 0.04;
             touchBounce *= 0.84f;
+            UpdateMood();
+            if (pikaImage != null && ImageAnimator.CanAnimate(pikaImage))
+                ImageAnimator.UpdateFrames(pikaImage);
             Invalidate();
         };
         timer.Start();
 
         ApplyLanguage();
+        LoadChatHistory();
         LoadPikaImageAsync();
         SimpleProgram.Log("floating-ready");
     }
@@ -123,23 +140,62 @@ internal sealed class FloatingPikaForm : Form
             Image loaded = null;
             try
             {
-                string assetPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "assets", "pikachu.png");
-                if (File.Exists(assetPath))
+                string assetsDirectory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "assets");
+                string gifPath = Path.Combine(assetsDirectory, "pikachu.gif");
+                string pngPath = Path.Combine(assetsDirectory, "pikachu.png");
+                if (File.Exists(gifPath))
                 {
-                    using (Image image = Image.FromFile(assetPath))
+                    loaded = Image.FromFile(gifPath);
+                }
+                else if (File.Exists(pngPath))
+                {
+                    using (Image image = Image.FromFile(pngPath))
                         loaded = new Bitmap(image);
                 }
                 else
                 {
                     ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
-                    HttpWebRequest request = (HttpWebRequest)WebRequest.Create(
-                        "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/25.png");
-                    request.UserAgent = "DesktopPetMVP";
-                    request.Timeout = 7000;
-                    using (WebResponse response = request.GetResponse())
-                    using (Stream stream = response.GetResponseStream())
-                    using (Image image = Image.FromStream(stream))
-                        loaded = new Bitmap(image);
+                    string[] urls =
+                    {
+                        "https://img.pokemondb.net/sprites/home/normal/pikachu.png",
+                        "https://play.pokemonshowdown.com/sprites/ani/pikachu.gif",
+                        "https://gh-proxy.com/https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/home/25.png",
+                        "https://raw.gitmirror.com/PokeAPI/sprites/master/sprites/pokemon/other/home/25.png",
+                        "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/home/25.png",
+                        "https://raw.githubusercontent.com/PokeAPI/sprites/master/sprites/pokemon/other/official-artwork/25.png"
+                    };
+                    foreach (string url in urls)
+                    {
+                        try
+                        {
+                            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(url);
+                            request.UserAgent = "DesktopPetMVP";
+                            request.Timeout = 8000;
+                            using (WebResponse response = request.GetResponse())
+                            using (Stream stream = response.GetResponseStream())
+                            using (MemoryStream memory = new MemoryStream())
+                            {
+                                stream.CopyTo(memory);
+                                byte[] data = memory.ToArray();
+                                Directory.CreateDirectory(assetsDirectory);
+                                bool gif = data.Length > 3 && data[0] == 0x47 && data[1] == 0x49 && data[2] == 0x46;
+                                string target = gif ? gifPath : pngPath;
+                                File.WriteAllBytes(target, data);
+                                if (gif)
+                                    loaded = Image.FromFile(target);
+                                else
+                                {
+                                    using (Image image = Image.FromFile(target))
+                                        loaded = new Bitmap(image);
+                                }
+                            }
+                            if (loaded != null) break;
+                        }
+                        catch (Exception assetError)
+                        {
+                            SimpleProgram.Log("image-source-error:" + assetError.Message);
+                        }
+                    }
                 }
             }
             catch (Exception ex)
@@ -152,6 +208,8 @@ internal sealed class FloatingPikaForm : Form
                 BeginInvoke((Action)delegate
                 {
                     pikaImage = loaded;
+                    if (pikaImage != null && ImageAnimator.CanAnimate(pikaImage))
+                        ImageAnimator.Animate(pikaImage, delegate { });
                     loadingImage = false;
                     Invalidate();
                 });
@@ -163,7 +221,7 @@ internal sealed class FloatingPikaForm : Form
     {
         RoundedPanel panel = new RoundedPanel();
         panel.Location = new Point(4, 4);
-        panel.Size = new Size(262, 172);
+        panel.Size = new Size(312, 312);
         panel.BackColor = Color.FromArgb(255, 255, 252, 241);
         panel.BorderColor = Color.FromArgb(232, 207, 135);
         panel.Radius = 14;
@@ -171,31 +229,31 @@ internal sealed class FloatingPikaForm : Form
         Label title = new Label();
         title.Name = "TitleLabel";
         title.Location = new Point(12, 9);
-        title.Size = new Size(86, 22);
+        title.Size = new Size(92, 22);
         title.Font = new Font("Microsoft YaHei UI", 9.5f, FontStyle.Bold);
         title.ForeColor = Color.FromArgb(42, 38, 30);
         panel.Controls.Add(title);
 
         statusLabel = new Label();
-        statusLabel.Location = new Point(91, 10);
-        statusLabel.Size = new Size(65, 18);
+        statusLabel.Location = new Point(100, 10);
+        statusLabel.Size = new Size(74, 18);
         statusLabel.Font = new Font("Microsoft YaHei UI", 7.5f);
         statusLabel.ForeColor = Color.FromArgb(112, 103, 85);
         statusLabel.TextAlign = ContentAlignment.MiddleRight;
         panel.Controls.Add(statusLabel);
 
-        chineseButton = BuildLanguageButton("中文", new Point(158, 7), 44);
+        chineseButton = BuildLanguageButton("中文", new Point(180, 7), 44);
         chineseButton.Click += delegate { SetLanguage(true); };
         panel.Controls.Add(chineseButton);
 
-        englishButton = BuildLanguageButton("EN", new Point(204, 7), 34);
+        englishButton = BuildLanguageButton("EN", new Point(226, 7), 34);
         englishButton.Click += delegate { SetLanguage(false); };
         panel.Controls.Add(englishButton);
 
         Button close = new Button();
         close.Text = "×";
-        close.Location = new Point(238, 6);
-        close.Size = new Size(20, 25);
+        close.Location = new Point(278, 6);
+        close.Size = new Size(24, 25);
         close.FlatStyle = FlatStyle.Flat;
         close.FlatAppearance.BorderSize = 0;
         close.BackColor = Color.FromArgb(255, 255, 252, 241);
@@ -204,18 +262,18 @@ internal sealed class FloatingPikaForm : Form
         close.Click += delegate { ToggleBubble(false); };
         panel.Controls.Add(close);
 
-        reply = new Label();
-        reply.Location = new Point(12, 38);
-        reply.Size = new Size(238, 79);
-        reply.Font = new Font("Microsoft YaHei UI", 9f);
-        reply.ForeColor = Color.FromArgb(35, 31, 25);
-        reply.BackColor = Color.Transparent;
-        reply.TextAlign = ContentAlignment.MiddleLeft;
-        panel.Controls.Add(reply);
+        historyPanel = new FlowLayoutPanel();
+        historyPanel.Location = new Point(10, 38);
+        historyPanel.Size = new Size(292, 218);
+        historyPanel.FlowDirection = FlowDirection.TopDown;
+        historyPanel.WrapContents = false;
+        historyPanel.AutoScroll = true;
+        historyPanel.BackColor = Color.FromArgb(255, 255, 252, 241);
+        panel.Controls.Add(historyPanel);
 
         input = new TextBox();
-        input.Location = new Point(12, 130);
-        input.Size = new Size(192, 26);
+        input.Location = new Point(12, 270);
+        input.Size = new Size(238, 26);
         input.Font = new Font("Microsoft YaHei UI", 9f);
         input.KeyDown += delegate(object sender, KeyEventArgs e)
         {
@@ -228,8 +286,8 @@ internal sealed class FloatingPikaForm : Form
         panel.Controls.Add(input);
 
         send = new Button();
-        send.Location = new Point(211, 128);
-        send.Size = new Size(39, 30);
+        send.Location = new Point(258, 268);
+        send.Size = new Size(42, 30);
         send.BackColor = Color.FromArgb(30, 31, 34);
         send.ForeColor = Color.White;
         send.FlatStyle = FlatStyle.Flat;
@@ -269,9 +327,6 @@ internal sealed class FloatingPikaForm : Form
         if (title != null)
             title.Text = chinese ? "\u76ae\u5361\u4f19\u4f34" : "Pika Buddy";
 
-        reply.Text = chinese
-            ? "\u76ae\u5361\uff01\u70b9\u6211\u5c31\u53ef\u4ee5\u804a\u5929\u3002"
-            : "Pika! Click me whenever you want to chat.";
         send.Text = chinese ? "\u53d1" : ">";
         showChatItem.Text = chinese ? "\u6253\u5f00\u5bf9\u8bdd" : "Open chat";
         exitItem.Text = chinese ? "\u9000\u51fa\u684c\u5ba0" : "Exit";
@@ -286,7 +341,12 @@ internal sealed class FloatingPikaForm : Form
     private void ToggleBubble(bool open)
     {
         bubble.Visible = open;
-        if (open) input.Focus();
+        if (open)
+        {
+            SetMood(PetMood.Happy, 1.8);
+            ScrollHistoryToBottom();
+            input.Focus();
+        }
         Invalidate();
     }
 
@@ -295,14 +355,16 @@ internal sealed class FloatingPikaForm : Form
         string text = input.Text.Trim();
         if (text.Length == 0) return;
 
+        lastInteraction = DateTime.Now;
         bool responseInChinese = chinese;
         input.Text = "";
-        reply.Text = responseInChinese
-            ? "\u4f60\uff1a" + text + Environment.NewLine + "\u76ae\u5361\u6b63\u5728\u60f3\u2026\u2026"
-            : "You: " + text + Environment.NewLine + "Pika is thinking...";
+        AddMessageBubble("user", text);
+        Label thinkingBubble = AddMessageBubble("thinking",
+            responseInChinese ? "\u76ae\u5361\u6b63\u5728\u60f3\u2026\u2026" : "Pika is thinking...");
         send.Enabled = false;
         input.Enabled = false;
         talking = true;
+        SetMood(PetMood.Thinking, 30);
         Invalidate();
 
         Task.Factory.StartNew(delegate
@@ -310,12 +372,22 @@ internal sealed class FloatingPikaForm : Form
             string answer = Answer(text, responseInChinese);
             BeginInvoke((Action)delegate
             {
-                reply.Text = responseInChinese
-                    ? "\u4f60\uff1a" + text + Environment.NewLine + "\u76ae\u5361\uff1a" + answer
-                    : "You: " + text + Environment.NewLine + "Pika: " + answer;
+                if (thinkingBubble.Parent != null && thinkingBubble.Parent.Parent != null)
+                {
+                    Control thinkingRow = thinkingBubble.Parent.Parent;
+                    historyPanel.Controls.Remove(thinkingRow);
+                    thinkingRow.Dispose();
+                }
+                AddMessageBubble("assistant", answer);
+                conversation.Add(new ChatMessage("user", text));
+                conversation.Add(new ChatMessage("assistant", answer));
+                if (conversation.Count > 80)
+                    conversation.RemoveRange(0, conversation.Count - 80);
+                SaveChatHistory();
                 send.Enabled = true;
                 input.Enabled = true;
                 talking = false;
+                SetMood(PetMood.Talking, 2.4);
                 UpdateConnectionStatus(lastReplyOnline);
                 input.Focus();
                 Invalidate();
@@ -451,12 +523,109 @@ internal sealed class FloatingPikaForm : Form
                 return responseInChinese
                     ? "\u6211\u521a\u624d\u60f3\u597d\u4e86\uff0c\u53ef\u662f\u8bdd\u6ca1\u663e\u793a\u51fa\u6765\u3002"
                     : "I thought of an answer, but it did not render.";
-            string answer = Regex.Unescape(content).Replace("\\/", "/");
-            conversation.Add(new ChatMessage("user", text));
-            conversation.Add(new ChatMessage("assistant", answer));
-            if (conversation.Count > 14)
-                conversation.RemoveRange(0, conversation.Count - 14);
-            return answer;
+            return Regex.Unescape(content).Replace("\\/", "/");
+        }
+    }
+
+    private Label AddMessageBubble(string role, string content)
+    {
+        bool user = role == "user";
+        bool thinking = role == "thinking";
+        Font font = new Font("Microsoft YaHei UI", 8.7f);
+        Size measured = TextRenderer.MeasureText(content, font, new Size(214, 0),
+            TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl);
+        int bubbleWidth = Math.Min(232, Math.Max(76, measured.Width + 24));
+        int bubbleHeight = Math.Max(34, measured.Height + 18);
+
+        Panel row = new Panel();
+        row.Size = new Size(270, bubbleHeight + 5);
+        row.Margin = new Padding(0);
+        row.BackColor = Color.Transparent;
+
+        RoundedPanel message = new RoundedPanel();
+        message.Size = new Size(bubbleWidth, bubbleHeight);
+        message.Location = new Point(user ? row.Width - bubbleWidth - 3 : 3, 1);
+        message.Radius = 13;
+        message.BackColor = user
+            ? Color.FromArgb(255, 224, 105)
+            : thinking ? Color.FromArgb(242, 238, 225) : Color.White;
+        message.BorderColor = user
+            ? Color.FromArgb(235, 190, 57)
+            : Color.FromArgb(230, 222, 196);
+
+        Label label = new Label();
+        label.Text = content;
+        label.Location = new Point(11, 8);
+        label.Size = new Size(bubbleWidth - 22, bubbleHeight - 14);
+        label.Font = font;
+        label.ForeColor = Color.FromArgb(39, 35, 28);
+        label.BackColor = Color.Transparent;
+        message.Controls.Add(label);
+        row.Controls.Add(message);
+        historyPanel.Controls.Add(row);
+        ScrollHistoryToBottom();
+        return label;
+    }
+
+    private void ScrollHistoryToBottom()
+    {
+        if (historyPanel == null || historyPanel.Controls.Count == 0) return;
+        historyPanel.ScrollControlIntoView(historyPanel.Controls[historyPanel.Controls.Count - 1]);
+    }
+
+    private string HistoryPath
+    {
+        get { return Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "chat-history.txt"); }
+    }
+
+    private void LoadChatHistory()
+    {
+        historyPanel.Controls.Clear();
+        conversation.Clear();
+        try
+        {
+            if (File.Exists(HistoryPath))
+            {
+                foreach (string line in File.ReadAllLines(HistoryPath, Encoding.UTF8))
+                {
+                    int split = line.IndexOf('|');
+                    if (split <= 0) continue;
+                    string role = line.Substring(0, split);
+                    string content = Encoding.UTF8.GetString(Convert.FromBase64String(line.Substring(split + 1)));
+                    if (role != "user" && role != "assistant") continue;
+                    conversation.Add(new ChatMessage(role, content));
+                    AddMessageBubble(role, content);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            SimpleProgram.Log("history-load-error:" + ex.Message);
+        }
+
+        if (conversation.Count == 0)
+            AddMessageBubble("assistant", chinese
+                ? "\u76ae\u5361\uff01\u8fd9\u91cc\u4f1a\u4fdd\u7559\u6211\u4eec\u7684\u804a\u5929\u8bb0\u5f55\u3002"
+                : "Pika! Our chat history will stay here.");
+        ScrollHistoryToBottom();
+    }
+
+    private void SaveChatHistory()
+    {
+        try
+        {
+            List<string> lines = new List<string>();
+            int start = Math.Max(0, conversation.Count - 80);
+            for (int i = start; i < conversation.Count; i++)
+            {
+                lines.Add(conversation[i].Role + "|" +
+                    Convert.ToBase64String(Encoding.UTF8.GetBytes(conversation[i].Content)));
+            }
+            File.WriteAllLines(HistoryPath, lines.ToArray(), Encoding.UTF8);
+        }
+        catch (Exception ex)
+        {
+            SimpleProgram.Log("history-save-error:" + ex.Message);
         }
     }
 
@@ -481,6 +650,33 @@ internal sealed class FloatingPikaForm : Form
         }
     }
 
+    private void SetMood(PetMood next, double seconds)
+    {
+        mood = next;
+        moodUntil = DateTime.Now.AddSeconds(seconds);
+        if (next != PetMood.Sleepy)
+            lastInteraction = DateTime.Now;
+        Invalidate();
+    }
+
+    private void UpdateMood()
+    {
+        if (dragging)
+        {
+            mood = PetMood.Happy;
+            return;
+        }
+        if (talking && mood != PetMood.Thinking)
+        {
+            mood = PetMood.Talking;
+            return;
+        }
+        if (DateTime.Now < moodUntil) return;
+        mood = DateTime.Now - lastInteraction > TimeSpan.FromSeconds(45)
+            ? PetMood.Sleepy
+            : PetMood.Idle;
+    }
+
     private static string JsonEscape(string value)
     {
         return value.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "\\r").Replace("\n", "\\n");
@@ -491,6 +687,7 @@ internal sealed class FloatingPikaForm : Form
         base.OnMouseDown(e);
         if (e.Button == MouseButtons.Left && PetRect.Contains(e.Location))
         {
+            lastInteraction = DateTime.Now;
             dragging = true;
             dragMoved = false;
             dragStart = Cursor.Position;
@@ -506,6 +703,7 @@ internal sealed class FloatingPikaForm : Form
         if (overPet && !petHovering && !bubble.Visible && !dragging)
         {
             petHovering = true;
+            lastInteraction = DateTime.Now;
             ShowHoverLine();
         }
         else if (!overPet)
@@ -530,7 +728,10 @@ internal sealed class FloatingPikaForm : Form
         dragging = false;
         Capture = false;
         if (!dragMoved)
+        {
+            SetMood(PetMood.Happy, 1.8);
             ToggleBubble(!bubble.Visible);
+        }
     }
 
     protected override void OnMouseLeave(EventArgs e)
@@ -572,6 +773,7 @@ internal sealed class FloatingPikaForm : Form
         hoverText = lines[index];
         hoverUntil = DateTime.Now.AddSeconds(3);
         touchBounce = 1f;
+        SetMood(PetMood.Touch, 2.2);
         Invalidate();
     }
 
@@ -662,9 +864,9 @@ internal sealed class FloatingPikaForm : Form
         {
             Point[] points =
             {
-                new Point(156, 174),
-                new Point(186, 174),
-                new Point(180, 204)
+                new Point(176, 314),
+                new Point(206, 314),
+                new Point(190, 342)
             };
             g.FillPolygon(brush, points);
         }
@@ -673,22 +875,50 @@ internal sealed class FloatingPikaForm : Form
     private void DrawPika(Graphics g, Rectangle rect)
     {
         GraphicsState state = g.Save();
-        float bob = (float)Math.Sin(tick * 2.4) * 3f - touchBounce * 8f;
-        float pulse = talking ? (float)(1f + Math.Sin(tick * 12) * 0.025f) : 1f;
+        float bob = (float)Math.Sin(tick * 2.4) * 2.2f - touchBounce * 8f;
+        float pulse = mood == PetMood.Talking ? (float)(1f + Math.Sin(tick * 12) * 0.035f) : 1f;
         float hoverScale = touchBounce > 0.02f ? 1f + touchBounce * 0.08f : 1f;
         float angle = dragging ? (float)Math.Sin(tick * 22) * 3f : (float)Math.Sin(tick * 1.4) * 0.8f;
+        float scaleX = pulse * hoverScale;
+        float scaleY = scaleX;
+        float shiftX = 0;
 
-        g.TranslateTransform(rect.Left + rect.Width / 2f, rect.Top + rect.Height / 2f + bob);
+        if (mood == PetMood.Happy)
+        {
+            bob -= (float)Math.Abs(Math.Sin(tick * 7)) * 14f;
+            angle = (float)Math.Sin(tick * 8) * 4f;
+        }
+        else if (mood == PetMood.Touch)
+        {
+            shiftX = (float)Math.Sin(tick * 24) * 4f;
+            angle = (float)Math.Sin(tick * 18) * 3f;
+        }
+        else if (mood == PetMood.Thinking)
+        {
+            angle = -7f + (float)Math.Sin(tick * 2) * 1.5f;
+            bob += 2f;
+        }
+        else if (mood == PetMood.Sleepy)
+        {
+            angle = 5f;
+            bob += 10f;
+            scaleY *= 0.84f;
+            scaleX *= 1.06f;
+        }
+
+        g.TranslateTransform(rect.Left + rect.Width / 2f + shiftX, rect.Top + rect.Height / 2f + bob);
         g.RotateTransform(angle);
-        g.ScaleTransform(pulse * hoverScale, pulse * hoverScale);
+        g.ScaleTransform(scaleX, scaleY);
 
         DrawPetShadow(g);
-        DrawElectricSparks(g);
+        if (mood == PetMood.Touch || mood == PetMood.Happy)
+            DrawElectricSparks(g);
 
         if (pikaImage != null)
         {
             RectangleF imageRect = new RectangleF(-76, -72, 152, 152);
             g.DrawImage(pikaImage, imageRect);
+            DrawMoodEffects(g);
             g.Restore(state);
             return;
         }
@@ -706,30 +936,51 @@ internal sealed class FloatingPikaForm : Form
         using (Pen smilePen = new Pen(Color.FromArgb(30, 28, 24), 4f))
         {
             g.ScaleTransform(0.72f, 0.72f);
-            DrawTail(g, yellowDark, outline);
+            DrawTail(g, yellow, outline);
             DrawEar(g, -62, -88, -22, yellow, black, outline);
             DrawEar(g, 62, -88, 22, yellow, black, outline);
 
-            g.FillEllipse(yellowDark, -57, 17, 114, 96);
+            g.FillEllipse(yellow, -57, 17, 114, 96);
             g.DrawEllipse(outline, -57, 17, 114, 96);
             g.FillEllipse(yellowLight, -36, 43, 72, 52);
+            g.FillPolygon(yellowDark, new PointF[] {
+                new PointF(47, 34), new PointF(66, 42), new PointF(49, 51),
+                new PointF(67, 59), new PointF(48, 68)
+            });
 
             g.FillEllipse(yellow, -88, -68, 176, 140);
             g.DrawEllipse(outline, -88, -68, 176, 140);
             g.FillEllipse(yellowLight, -60, -51, 81, 42);
 
-            g.FillEllipse(yellowDark, -68, 86, 58, 24);
+            g.FillEllipse(yellow, -68, 86, 58, 24);
             g.DrawEllipse(outline, -68, 86, 58, 24);
-            g.FillEllipse(yellowDark, 10, 86, 58, 24);
+            g.FillEllipse(yellow, 10, 86, 58, 24);
             g.DrawEllipse(outline, 10, 86, 58, 24);
 
-            g.DrawArc(detailPen, -62, 43, 48, 42, 210, 88);
-            g.DrawArc(detailPen, 14, 43, 48, 42, 242, 88);
+            g.FillEllipse(yellow, -72, 39, 39, 56);
+            g.DrawEllipse(outline, -72, 39, 39, 56);
+            g.FillEllipse(yellow, 33, 39, 39, 56);
+            g.DrawEllipse(outline, 33, 39, 39, 56);
 
-            g.FillEllipse(black, -50, -20, 25, 35);
-            g.FillEllipse(white, -43, -12, 8, 9);
-            g.FillEllipse(black, 25, -20, 25, 35);
-            g.FillEllipse(white, 32, -12, 8, 9);
+            if (mood == PetMood.Sleepy || mood == PetMood.Happy)
+            {
+                g.DrawArc(detailPen, -52, -11, 28, 22, 10, 160);
+                g.DrawArc(detailPen, 24, -11, 28, 22, 10, 160);
+            }
+            else
+            {
+                g.FillEllipse(black, -50, -20, 25, 35);
+                g.FillEllipse(white, -43, -12, 8, 9);
+                g.FillEllipse(black, 25, -20, 25, 35);
+                g.FillEllipse(white, 32, -12, 8, 9);
+                if (mood == PetMood.Touch)
+                {
+                    g.FillEllipse(white, -48, -18, 21, 31);
+                    g.FillEllipse(black, -42, -10, 10, 18);
+                    g.FillEllipse(white, 27, -18, 21, 31);
+                    g.FillEllipse(black, 33, -10, 10, 18);
+                }
+            }
 
             PointF[] nose =
             {
@@ -744,7 +995,12 @@ internal sealed class FloatingPikaForm : Form
             g.FillEllipse(cheekShine, -68, 19, 10, 7);
             g.FillEllipse(cheekShine, 48, 19, 10, 7);
 
-            if (talking)
+            if (mood == PetMood.Touch)
+            {
+                g.FillEllipse(black, -10, 28, 20, 23);
+                g.FillEllipse(red, -5, 38, 10, 7);
+            }
+            else if (talking)
             {
                 float h = 12 + (float)Math.Abs(Math.Sin(tick * 20)) * 8;
                 g.FillEllipse(black, -15, 29, 30, h);
@@ -757,7 +1013,54 @@ internal sealed class FloatingPikaForm : Form
             }
         }
 
+        DrawMoodEffects(g);
         g.Restore(state);
+    }
+
+    private void DrawMoodEffects(Graphics g)
+    {
+        using (Font effectFont = new Font("Segoe UI", 13f, FontStyle.Bold))
+        using (Font sleepFont = new Font("Segoe UI", 16f, FontStyle.Bold))
+        using (Brush dark = new SolidBrush(Color.FromArgb(115, 81, 42)))
+        using (Brush yellow = new SolidBrush(Color.FromArgb(255, 215, 55)))
+        using (Brush white = new SolidBrush(Color.FromArgb(245, 255, 255, 255)))
+        {
+            if (mood == PetMood.Thinking)
+            {
+                g.FillEllipse(white, 53, -64, 14, 14);
+                g.FillEllipse(white, 67, -82, 22, 22);
+                g.DrawString("?", effectFont, dark, 72, -86);
+            }
+            else if (mood == PetMood.Sleepy)
+            {
+                g.DrawString("z", effectFont, dark, 52, -55);
+                g.DrawString("Z", sleepFont, dark, 70, -78);
+            }
+            else if (mood == PetMood.Happy)
+            {
+                DrawStar(g, yellow, -91, -56, 9);
+                DrawStar(g, yellow, 83, -38, 7);
+            }
+            else if (mood == PetMood.Talking)
+            {
+                float wave = (float)Math.Abs(Math.Sin(tick * 9));
+                g.FillEllipse(dark, -17, -91 - wave * 3, 6, 6);
+                g.FillEllipse(dark, -3, -95 - wave * 3, 7, 7);
+                g.FillEllipse(dark, 12, -91 - wave * 3, 6, 6);
+            }
+        }
+    }
+
+    private static void DrawStar(Graphics g, Brush brush, float x, float y, float size)
+    {
+        PointF[] points = new PointF[8];
+        for (int i = 0; i < 8; i++)
+        {
+            double angle = Math.PI * i / 4.0;
+            float radius = i % 2 == 0 ? size : size * 0.35f;
+            points[i] = new PointF(x + (float)Math.Cos(angle) * radius, y + (float)Math.Sin(angle) * radius);
+        }
+        g.FillPolygon(brush, points);
     }
 
     private void DrawPetShadow(Graphics g)
