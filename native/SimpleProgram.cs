@@ -4,6 +4,7 @@ using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.IO;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -46,7 +47,7 @@ internal enum PetMood
 internal sealed class FloatingPikaForm : Form
 {
     private Panel bubble;
-    private FlowLayoutPanel historyPanel;
+    private ChatFlowPanel historyPanel;
     private TextBox input;
     private Button send;
     private readonly Timer timer;
@@ -92,8 +93,9 @@ internal sealed class FloatingPikaForm : Form
         FormBorderStyle = FormBorderStyle.None;
         ShowInTaskbar = false;
         TopMost = true;
-        BackColor = Color.Magenta;
-        TransparencyKey = Color.Magenta;
+        Color transparencyColor = Color.FromArgb(1, 1, 1);
+        BackColor = transparencyColor;
+        TransparencyKey = transparencyColor;
         DoubleBuffered = true;
 
         Rectangle work = Screen.PrimaryScreen.WorkingArea;
@@ -271,12 +273,13 @@ internal sealed class FloatingPikaForm : Form
         close.Click += delegate { ToggleBubble(false); };
         panel.Controls.Add(close);
 
-        historyPanel = new FlowLayoutPanel();
+        historyPanel = new ChatFlowPanel();
         historyPanel.Location = new Point(10, 38);
         historyPanel.Size = new Size(292, 218);
         historyPanel.FlowDirection = FlowDirection.TopDown;
         historyPanel.WrapContents = false;
         historyPanel.AutoScroll = true;
+        historyPanel.Padding = new Padding(0, 4, 0, 4);
         historyPanel.BackColor = Color.FromArgb(255, 255, 252, 241);
         panel.Controls.Add(historyPanel);
 
@@ -554,20 +557,28 @@ internal sealed class FloatingPikaForm : Form
     {
         bool user = role == "user";
         bool thinking = role == "thinking";
-        Font font = new Font("Microsoft YaHei UI", 8.7f);
-        Size measured = TextRenderer.MeasureText(content, font, new Size(214, 0),
-            TextFormatFlags.WordBreak | TextFormatFlags.TextBoxControl);
-        int bubbleWidth = Math.Min(232, Math.Max(76, measured.Width + 24));
-        int bubbleHeight = Math.Max(34, measured.Height + 18);
+        Font font = new Font("Microsoft YaHei UI", 8.5f);
+
+        Label label = new Label();
+        label.Text = content;
+        label.Font = font;
+        label.ForeColor = Color.FromArgb(39, 35, 28);
+        label.BackColor = Color.Transparent;
+        label.AutoSize = true;
+        label.MaximumSize = new Size(218, 0);
+        label.UseCompatibleTextRendering = false;
+        Size preferred = label.PreferredSize;
+        int bubbleWidth = Math.Min(242, Math.Max(76, preferred.Width + 24));
+        int bubbleHeight = Math.Max(36, preferred.Height + 20);
 
         Panel row = new Panel();
-        row.Size = new Size(270, bubbleHeight + 5);
-        row.Margin = new Padding(0);
+        row.Size = new Size(276, bubbleHeight + 8);
+        row.Margin = new Padding(0, 1, 0, 1);
         row.BackColor = Color.Transparent;
 
         RoundedPanel message = new RoundedPanel();
         message.Size = new Size(bubbleWidth, bubbleHeight);
-        message.Location = new Point(user ? row.Width - bubbleWidth - 3 : 3, 1);
+        message.Location = new Point(user ? row.Width - bubbleWidth - 4 : 4, 2);
         message.Radius = 13;
         message.BackColor = user
             ? Color.FromArgb(255, 224, 105)
@@ -576,13 +587,7 @@ internal sealed class FloatingPikaForm : Form
             ? Color.FromArgb(235, 190, 57)
             : Color.FromArgb(230, 222, 196);
 
-        Label label = new Label();
-        label.Text = content;
         label.Location = new Point(11, 8);
-        label.Size = new Size(bubbleWidth - 22, bubbleHeight - 14);
-        label.Font = font;
-        label.ForeColor = Color.FromArgb(39, 35, 28);
-        label.BackColor = Color.Transparent;
         message.Controls.Add(label);
         row.Controls.Add(message);
         historyPanel.Controls.Add(row);
@@ -593,7 +598,9 @@ internal sealed class FloatingPikaForm : Form
     private void ScrollHistoryToBottom()
     {
         if (historyPanel == null || historyPanel.Controls.Count == 0) return;
+        historyPanel.PerformLayout();
         historyPanel.ScrollControlIntoView(historyPanel.Controls[historyPanel.Controls.Count - 1]);
+        historyPanel.HideNativeScrollBar();
     }
 
     private string HistoryPath
@@ -923,10 +930,8 @@ internal sealed class FloatingPikaForm : Form
         }
         else if (mood == PetMood.Sleepy)
         {
-            angle = 5f;
-            bob += 10f;
-            scaleY *= 0.84f;
-            scaleX *= 1.06f;
+            angle = 1.5f;
+            bob += 8f + (float)Math.Sin(tick * 1.2) * 1.2f;
         }
 
         g.TranslateTransform(rect.Left + rect.Width / 2f + shiftX, rect.Top + rect.Height / 2f + bob);
@@ -965,6 +970,11 @@ internal sealed class FloatingPikaForm : Form
         using (Pen detail = new Pen(Color.FromArgb(88, 67, 36), 3.2f))
         {
             g.ScaleTransform(0.72f, 0.72f);
+            if (mood == PetMood.Sleepy)
+            {
+                DrawSleepyPikachu(g, yellow, yellowDark, yellowLight, black, red, cheekShine, outline, detail);
+                return;
+            }
 
             float headX = 0, headY = -3, headW = 176, headH = 140;
             RectangleF body = new RectangleF(-57, 17, 114, 96);
@@ -1017,18 +1027,6 @@ internal sealed class FloatingPikaForm : Form
                 rightArm = new RectangleF(42, -14, 36, 72);
                 leftArmAngle = -15; rightArmAngle = 38 + (float)Math.Sin(tick * 14) * 15f;
             }
-            else if (mood == PetMood.Sleepy)
-            {
-                headX = -35; headY = 25; headW = 145; headH = 104;
-                body = new RectangleF(-43, 31, 146, 78);
-                leftEarX = -68; rightEarX = 32; earY = -30;
-                leftEarAngle = -78; rightEarAngle = 84;
-                leftArm = new RectangleF(-28, 58, 48, 30);
-                rightArm = new RectangleF(13, 58, 48, 30);
-                leftArmAngle = 10; rightArmAngle = -10;
-                drawFeet = false;
-            }
-
             DrawTailPose(g, yellow, outline, mood);
             DrawEar(g, leftEarX, earY, leftEarAngle, yellow, black, outline);
             DrawEar(g, rightEarX, earY, rightEarAngle, yellow, black, outline);
@@ -1060,6 +1058,75 @@ internal sealed class FloatingPikaForm : Form
                 new PointF(body.Right - 10, body.Top + 53)
             });
         }
+    }
+
+    private static void DrawSleepyPikachu(
+        Graphics g, Brush yellow, Brush yellowDark, Brush yellowLight, Brush black,
+        Brush red, Brush cheekShine, Pen outline, Pen detail)
+    {
+        GraphicsState tailState = g.Save();
+        g.TranslateTransform(34, 42);
+        g.RotateTransform(24);
+        g.ScaleTransform(0.52f, 0.52f);
+        DrawTail(g, yellow, outline);
+        g.Restore(tailState);
+
+        DrawFoldedEar(g, yellow, black, outline, true);
+        DrawFoldedEar(g, yellow, black, outline, false);
+
+        RectangleF body = new RectangleF(-18, 15, 124, 86);
+        g.FillEllipse(yellow, body);
+        g.DrawEllipse(outline, body);
+        g.FillEllipse(yellowLight, 16, 49, 62, 34);
+        g.FillPolygon(yellowDark, new PointF[] {
+            new PointF(73, 31), new PointF(92, 38), new PointF(76, 47),
+            new PointF(94, 55), new PointF(77, 64)
+        });
+
+        RectangleF head = new RectangleF(-96, -18, 132, 106);
+        g.FillEllipse(yellow, head);
+        g.DrawEllipse(outline, head);
+        g.FillEllipse(yellowLight, -68, -3, 70, 31);
+
+        g.DrawArc(detail, -70, 20, 28, 20, 12, 158);
+        g.DrawArc(detail, -25, 20, 28, 20, 12, 158);
+        g.FillEllipse(red, -88, 39, 31, 25);
+        g.FillEllipse(red, 1, 39, 31, 25);
+        g.FillEllipse(cheekShine, -81, 43, 9, 6);
+        g.FillEllipse(cheekShine, 8, 43, 9, 6);
+        g.FillPolygon(black, new PointF[] {
+            new PointF(-38, 43), new PointF(-29, 43), new PointF(-34, 49)
+        });
+        g.DrawArc(detail, -46, 48, 25, 18, 20, 140);
+
+        RectangleF leftPaw = new RectangleF(-57, 67, 49, 24);
+        RectangleF rightPaw = new RectangleF(-15, 67, 49, 24);
+        g.FillEllipse(yellow, leftPaw); g.DrawEllipse(outline, leftPaw);
+        g.FillEllipse(yellow, rightPaw); g.DrawEllipse(outline, rightPaw);
+    }
+
+    private static void DrawFoldedEar(Graphics g, Brush yellow, Brush black, Pen outline, bool left)
+    {
+        PointF[] ear = left
+            ? new PointF[] {
+                new PointF(-87, -24), new PointF(-45, -22), new PointF(-5, -5),
+                new PointF(-24, 10), new PointF(-70, -5)
+            }
+            : new PointF[] {
+                new PointF(-5, -10), new PointF(38, -34), new PointF(91, -28),
+                new PointF(65, -7), new PointF(20, 7)
+            };
+        g.FillPolygon(yellow, ear);
+        g.DrawPolygon(outline, ear);
+
+        PointF[] tip = left
+            ? new PointF[] {
+                new PointF(-87, -24), new PointF(-70, -5), new PointF(-53, -11), new PointF(-69, -23)
+            }
+            : new PointF[] {
+                new PointF(91, -28), new PointF(65, -7), new PointF(49, -14), new PointF(67, -29)
+            };
+        g.FillPolygon(black, tip);
     }
 
     private void DrawPikaFace(Graphics g, float x, float y, Brush black, Brush red, Brush white, Brush shine, Pen detail)
@@ -1285,6 +1352,37 @@ internal sealed class ChatMessage
     {
         Role = role;
         Content = content;
+    }
+}
+
+internal sealed class ChatFlowPanel : FlowLayoutPanel
+{
+    private const int SbVert = 1;
+
+    [DllImport("user32.dll")]
+    private static extern bool ShowScrollBar(IntPtr hWnd, int wBar, bool bShow);
+
+    public ChatFlowPanel()
+    {
+        DoubleBuffered = true;
+    }
+
+    public void HideNativeScrollBar()
+    {
+        if (IsHandleCreated)
+            ShowScrollBar(Handle, SbVert, false);
+    }
+
+    protected override void OnLayout(LayoutEventArgs levent)
+    {
+        base.OnLayout(levent);
+        HideNativeScrollBar();
+    }
+
+    protected override void OnMouseWheel(MouseEventArgs e)
+    {
+        base.OnMouseWheel(e);
+        HideNativeScrollBar();
     }
 }
 
