@@ -68,7 +68,10 @@ internal sealed class PikaWindow : Window
     private readonly Canvas petStage;
     private Image petImage;
     private Canvas effects;
+    private Border stateBadge;
+    private TextBlock stateBadgeText;
     private readonly DispatcherTimer idleTimer;
+    private readonly DispatcherTimer ambientTimer;
     private readonly Random random = new Random();
     private readonly List<ChatEntry> conversation = new List<ChatEntry>();
     private readonly ScaleTransform petScale = new ScaleTransform(1, 1);
@@ -79,6 +82,8 @@ internal sealed class PikaWindow : Window
     private bool chinese = true;
     private bool sending;
     private bool dragging;
+    private int stateVersion;
+    private DateTime previewLockedUntil = DateTime.MinValue;
     private Point dragStart;
     private Point windowStart;
 
@@ -125,6 +130,19 @@ internal sealed class PikaWindow : Window
                 SetState(PikaState.Sleepy, false);
         };
         idleTimer.Start();
+
+        ambientTimer = new DispatcherTimer();
+        ambientTimer.Interval = TimeSpan.FromSeconds(12);
+        ambientTimer.Tick += delegate
+        {
+            if (!sending && !dragging && chat.Visibility != Visibility.Visible &&
+                DateTime.Now >= previewLockedUntil && state == PikaState.Idle)
+            {
+                PikaState[] ambient = { PikaState.Happy, PikaState.Thinking, PikaState.Touch };
+                SetState(ambient[random.Next(ambient.Length)], true);
+            }
+        };
+        ambientTimer.Start();
 
         SourceInitialized += delegate
         {
@@ -353,6 +371,28 @@ internal sealed class PikaWindow : Window
 
         effects = new Canvas { Width = 260, Height = 225, IsHitTestVisible = false };
         stage.Children.Add(effects);
+
+        stateBadgeText = new TextBlock
+        {
+            FontFamily = new FontFamily("Microsoft YaHei UI"),
+            FontSize = 11,
+            FontWeight = FontWeights.SemiBold,
+            Foreground = new SolidColorBrush(Color.FromRgb(69, 57, 34))
+        };
+        stateBadge = new Border
+        {
+            Child = stateBadgeText,
+            Background = new SolidColorBrush(Color.FromArgb(238, 255, 246, 190)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(230, 196, 88)),
+            BorderThickness = new Thickness(1),
+            CornerRadius = new CornerRadius(10),
+            Padding = new Thickness(9, 4, 9, 4),
+            Opacity = 0,
+            IsHitTestVisible = false
+        };
+        Canvas.SetLeft(stateBadge, 92);
+        Canvas.SetTop(stateBadge, 1);
+        stage.Children.Add(stateBadge);
         return stage;
     }
 
@@ -380,7 +420,13 @@ internal sealed class PikaWindow : Window
     private void AddStateMenu(MenuItem parent, string label, PikaState target)
     {
         MenuItem item = new MenuItem { Header = label };
-        item.Click += delegate { SetState(target, true); };
+        item.Click += delegate
+        {
+            previewLockedUntil = DateTime.MinValue;
+            SetState(target, true);
+            previewLockedUntil = DateTime.Now.AddSeconds(6);
+            ShowStateBadge(target, 6);
+        };
         parent.Items.Add(item);
     }
 
@@ -468,6 +514,8 @@ internal sealed class PikaWindow : Window
 
     private void SetState(PikaState next, bool animated)
     {
+        if (DateTime.Now < previewLockedUntil && next != state) return;
+        int version = ++stateVersion;
         state = next;
         if (next != PikaState.Sleepy) lastInteraction = DateTime.Now;
         ClearEffects();
@@ -490,39 +538,51 @@ internal sealed class PikaWindow : Window
         }
         else if (next == PikaState.Happy)
         {
-            AnimateMoveY(0, -22, 0.34, true);
-            AnimateRotate(-4, 4, 0.34, true);
+            AnimateBothScale(1.02, 1.1, 0.34, true);
+            AnimateMoveY(0, -34, 0.34, true);
+            AnimateRotate(-7, 7, 0.34, true);
             AddStars();
-            ReturnToIdleLater(3.0);
+            ShowStateBadge(next, 3);
+            ReturnToIdleLater(3.0, version);
         }
         else if (next == PikaState.Touch)
         {
-            AnimateMoveX(-5, 5, 0.11, true);
-            AnimateRotate(-3, 3, 0.11, true);
+            petScale.ScaleX = petScale.ScaleY = 1.08;
+            AnimateMoveX(-10, 10, 0.09, true);
+            AnimateRotate(-6, 6, 0.09, true);
             AddSparks();
-            ReturnToIdleLater(2.2);
+            ShowStateBadge(next, 2.2);
+            ReturnToIdleLater(2.2, version);
         }
         else if (next == PikaState.Thinking)
         {
-            petRotate.Angle = -8;
-            petMove.Y = 5;
+            petRotate.Angle = -15;
+            petMove.X = -22;
+            petMove.Y = 12;
+            petScale.ScaleX = petScale.ScaleY = 0.96;
             AddThought();
+            ShowStateBadge(next, sending ? 30 : 4);
+            if (!sending) ReturnToIdleLater(4.0, version);
         }
         else if (next == PikaState.Talking)
         {
-            AnimateBothScale(1, 1.035, 0.25, true);
-            AnimateMoveY(0, -4, 0.25, true);
+            petRotate.Angle = 5;
+            AnimateBothScale(1.02, 1.1, 0.23, true);
+            AnimateMoveY(0, -8, 0.23, true);
             AddSpeechDots();
-            ReturnToIdleLater(3.0);
+            ShowStateBadge(next, 3);
+            ReturnToIdleLater(3.0, version);
         }
         else if (next == PikaState.Sleepy)
         {
-            petRotate.Angle = -11;
-            petMove.X = 12;
-            petMove.Y = 21;
-            petScale.ScaleX = petScale.ScaleY = 0.92;
-            AnimateBothScale(0.92, 0.94, 2.2, true);
+            petRotate.Angle = 65;
+            petMove.X = 25;
+            petMove.Y = 42;
+            petScale.ScaleX = petScale.ScaleY = 0.8;
+            AnimateBothScale(0.8, 0.82, 2.2, true);
             AddSleep();
+            ShowStateBadge(next, 6);
+            if (DateTime.Now >= previewLockedUntil) ReturnToIdleLater(6.0, version);
         }
     }
 
@@ -559,15 +619,33 @@ internal sealed class PikaWindow : Window
         };
     }
 
-    private void ReturnToIdleLater(double seconds)
+    private void ReturnToIdleLater(double seconds, int version)
     {
         DispatcherTimer once = new DispatcherTimer { Interval = TimeSpan.FromSeconds(seconds) };
         once.Tick += delegate
         {
             once.Stop();
-            if (!sending && state != PikaState.Sleepy) SetState(PikaState.Idle, true);
+            if (!sending && stateVersion == version && DateTime.Now >= previewLockedUntil)
+                SetState(PikaState.Idle, true);
         };
         once.Start();
+    }
+
+    private void ShowStateBadge(PikaState target, double seconds)
+    {
+        string label = target == PikaState.Happy ? "开心充电" :
+            target == PikaState.Touch ? "触碰放电" :
+            target == PikaState.Thinking ? "认真思考" :
+            target == PikaState.Talking ? "正在说话" :
+            target == PikaState.Sleepy ? "困倦休息" : "待机陪伴";
+        stateBadgeText.Text = label;
+        stateBadge.BeginAnimation(UIElement.OpacityProperty, null);
+        stateBadge.Opacity = 1;
+        DoubleAnimation fade = new DoubleAnimation(1, 0, TimeSpan.FromSeconds(0.45))
+        {
+            BeginTime = TimeSpan.FromSeconds(Math.Max(0.5, seconds - 0.45))
+        };
+        stateBadge.BeginAnimation(UIElement.OpacityProperty, fade);
     }
 
     private void ClearEffects()
