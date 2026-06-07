@@ -55,6 +55,7 @@ internal sealed class FloatingPikaForm : Form
     private Button englishButton;
     private Label statusLabel;
     private ToolStripMenuItem showChatItem;
+    private ToolStripMenuItem previewMoodItem;
     private ToolStripMenuItem exitItem;
 
     private bool dragging;
@@ -105,9 +106,17 @@ internal sealed class FloatingPikaForm : Form
         menu = new ContextMenuStrip();
         showChatItem = new ToolStripMenuItem();
         showChatItem.Click += delegate { ToggleBubble(true); };
+        previewMoodItem = new ToolStripMenuItem();
+        AddMoodPreviewItem(previewMoodItem, "\u5f85\u673a / Idle", PetMood.Idle);
+        AddMoodPreviewItem(previewMoodItem, "\u5f00\u5fc3 / Happy", PetMood.Happy);
+        AddMoodPreviewItem(previewMoodItem, "\u89e6\u78b0 / Touch", PetMood.Touch);
+        AddMoodPreviewItem(previewMoodItem, "\u601d\u8003 / Thinking", PetMood.Thinking);
+        AddMoodPreviewItem(previewMoodItem, "\u8bf4\u8bdd / Talking", PetMood.Talking);
+        AddMoodPreviewItem(previewMoodItem, "\u56f0\u5026 / Sleepy", PetMood.Sleepy);
         exitItem = new ToolStripMenuItem();
         exitItem.Click += delegate { Close(); };
         menu.Items.Add(showChatItem);
+        menu.Items.Add(previewMoodItem);
         menu.Items.Add(new ToolStripSeparator());
         menu.Items.Add(exitItem);
         ContextMenuStrip = menu;
@@ -312,6 +321,19 @@ internal sealed class FloatingPikaForm : Form
         return button;
     }
 
+    private void AddMoodPreviewItem(ToolStripMenuItem parent, string text, PetMood previewMood)
+    {
+        ToolStripMenuItem item = new ToolStripMenuItem(text);
+        item.Click += delegate
+        {
+            mood = previewMood;
+            moodUntil = DateTime.Now.AddSeconds(6);
+            lastInteraction = DateTime.Now;
+            Invalidate();
+        };
+        parent.DropDownItems.Add(item);
+    }
+
     private void SetLanguage(bool useChinese)
     {
         chinese = useChinese;
@@ -329,6 +351,7 @@ internal sealed class FloatingPikaForm : Form
 
         send.Text = chinese ? "\u53d1" : ">";
         showChatItem.Text = chinese ? "\u6253\u5f00\u5bf9\u8bdd" : "Open chat";
+        previewMoodItem.Text = chinese ? "\u9884\u89c8\u516d\u79cd\u5f62\u6001" : "Preview six poses";
         exitItem.Text = chinese ? "\u9000\u51fa\u684c\u5ba0" : "Exit";
         UpdateConnectionStatus(null);
 
@@ -914,7 +937,7 @@ internal sealed class FloatingPikaForm : Form
         if (mood == PetMood.Touch || mood == PetMood.Happy)
             DrawElectricSparks(g);
 
-        if (pikaImage != null)
+        if (pikaImage != null && mood == PetMood.Idle)
         {
             RectangleF imageRect = new RectangleF(-76, -72, 152, 152);
             g.DrawImage(pikaImage, imageRect);
@@ -923,97 +946,198 @@ internal sealed class FloatingPikaForm : Form
             return;
         }
 
+        DrawPosePikachu(g);
+
+        DrawMoodEffects(g);
+        g.Restore(state);
+    }
+
+    private void DrawPosePikachu(Graphics g)
+    {
         using (Brush yellow = new SolidBrush(Color.FromArgb(255, 216, 77)))
-        using (Brush yellowDark = new SolidBrush(Color.FromArgb(232, 171, 47)))
+        using (Brush yellowDark = new SolidBrush(Color.FromArgb(225, 164, 43)))
         using (Brush yellowLight = new SolidBrush(Color.FromArgb(255, 239, 132)))
         using (Brush black = new SolidBrush(Color.FromArgb(30, 28, 24)))
-        using (Brush red = new SolidBrush(Color.FromArgb(255, 91, 83)))
+        using (Brush red = new SolidBrush(Color.FromArgb(255, 82, 76)))
         using (Brush white = new SolidBrush(Color.White))
-        using (Brush blush = new SolidBrush(Color.FromArgb(90, 255, 145, 120)))
-        using (Brush cheekShine = new SolidBrush(Color.FromArgb(105, 255, 255, 255)))
+        using (Brush cheekShine = new SolidBrush(Color.FromArgb(125, 255, 255, 255)))
         using (Pen outline = new Pen(Color.FromArgb(88, 67, 36), 4.5f))
-        using (Pen detailPen = new Pen(Color.FromArgb(88, 67, 36), 3.2f))
-        using (Pen smilePen = new Pen(Color.FromArgb(30, 28, 24), 4f))
+        using (Pen detail = new Pen(Color.FromArgb(88, 67, 36), 3.2f))
         {
             g.ScaleTransform(0.72f, 0.72f);
-            DrawTail(g, yellow, outline);
-            DrawEar(g, -62, -88, -22, yellow, black, outline);
-            DrawEar(g, 62, -88, 22, yellow, black, outline);
 
-            g.FillEllipse(yellow, -57, 17, 114, 96);
-            g.DrawEllipse(outline, -57, 17, 114, 96);
-            g.FillEllipse(yellowLight, -36, 43, 72, 52);
+            float headX = 0, headY = -3, headW = 176, headH = 140;
+            RectangleF body = new RectangleF(-57, 17, 114, 96);
+            float leftEarX = -62, rightEarX = 62, earY = -88, leftEarAngle = -22, rightEarAngle = 22;
+            RectangleF leftArm = new RectangleF(-72, 39, 39, 56);
+            RectangleF rightArm = new RectangleF(33, 39, 39, 56);
+            float leftArmAngle = 0, rightArmAngle = 0;
+            RectangleF leftFoot = new RectangleF(-68, 86, 58, 24);
+            RectangleF rightFoot = new RectangleF(10, 86, 58, 24);
+            bool drawFeet = true;
+
+            if (mood == PetMood.Happy)
+            {
+                body = new RectangleF(-52, 20, 104, 88);
+                leftEarAngle = -34; rightEarAngle = 34;
+                leftArm = new RectangleF(-78, -4, 34, 68);
+                rightArm = new RectangleF(44, -4, 34, 68);
+                leftArmAngle = -38; rightArmAngle = 38;
+                leftFoot = new RectangleF(-79, 83, 58, 25);
+                rightFoot = new RectangleF(21, 83, 58, 25);
+            }
+            else if (mood == PetMood.Touch)
+            {
+                headY = 4; headW = 184; headH = 132;
+                body = new RectangleF(-66, 25, 132, 80);
+                leftEarX = -77; rightEarX = 77; earY = -75;
+                leftEarAngle = -58; rightEarAngle = 58;
+                leftArm = new RectangleF(-91, 24, 42, 48);
+                rightArm = new RectangleF(49, 24, 42, 48);
+                leftArmAngle = -76; rightArmAngle = 76;
+                leftFoot = new RectangleF(-82, 83, 66, 27);
+                rightFoot = new RectangleF(16, 83, 66, 27);
+            }
+            else if (mood == PetMood.Thinking)
+            {
+                headX = -8; headY = -12;
+                body = new RectangleF(-57, 30, 114, 82);
+                leftEarAngle = -18; rightEarAngle = 54;
+                leftArm = new RectangleF(-57, 22, 36, 58);
+                rightArm = new RectangleF(25, 2, 34, 62);
+                leftArmAngle = 18; rightArmAngle = -42;
+                leftFoot = new RectangleF(-70, 84, 64, 28);
+                rightFoot = new RectangleF(6, 84, 64, 28);
+            }
+            else if (mood == PetMood.Talking)
+            {
+                headX = 5; headY = -4;
+                leftEarAngle = -28; rightEarAngle = 26;
+                leftArm = new RectangleF(-75, 35, 38, 58);
+                rightArm = new RectangleF(42, -14, 36, 72);
+                leftArmAngle = -15; rightArmAngle = 38 + (float)Math.Sin(tick * 14) * 15f;
+            }
+            else if (mood == PetMood.Sleepy)
+            {
+                headX = -35; headY = 25; headW = 145; headH = 104;
+                body = new RectangleF(-43, 31, 146, 78);
+                leftEarX = -68; rightEarX = 32; earY = -30;
+                leftEarAngle = -78; rightEarAngle = 84;
+                leftArm = new RectangleF(-28, 58, 48, 30);
+                rightArm = new RectangleF(13, 58, 48, 30);
+                leftArmAngle = 10; rightArmAngle = -10;
+                drawFeet = false;
+            }
+
+            DrawTailPose(g, yellow, outline, mood);
+            DrawEar(g, leftEarX, earY, leftEarAngle, yellow, black, outline);
+            DrawEar(g, rightEarX, earY, rightEarAngle, yellow, black, outline);
+
+            g.FillEllipse(yellow, body);
+            g.DrawEllipse(outline, body);
+            g.FillEllipse(yellowLight, body.X + body.Width * 0.23f, body.Y + body.Height * 0.42f,
+                body.Width * 0.54f, body.Height * 0.42f);
+
+            if (drawFeet)
+            {
+                g.FillEllipse(yellow, leftFoot); g.DrawEllipse(outline, leftFoot);
+                g.FillEllipse(yellow, rightFoot); g.DrawEllipse(outline, rightFoot);
+            }
+
+            DrawLimb(g, yellow, outline, leftArm, leftArmAngle);
+            DrawLimb(g, yellow, outline, rightArm, rightArmAngle);
+
+            RectangleF head = new RectangleF(headX - headW / 2f, headY - headH / 2f, headW, headH);
+            g.FillEllipse(yellow, head);
+            g.DrawEllipse(outline, head);
+            g.FillEllipse(yellowLight, head.X + 28, head.Y + 15, 78, 38);
+
+            DrawPikaFace(g, headX, headY, black, red, white, cheekShine, detail);
+
             g.FillPolygon(yellowDark, new PointF[] {
-                new PointF(47, 34), new PointF(66, 42), new PointF(49, 51),
-                new PointF(67, 59), new PointF(48, 68)
+                new PointF(body.Right - 12, body.Top + 18), new PointF(body.Right + 8, body.Top + 26),
+                new PointF(body.Right - 10, body.Top + 35), new PointF(body.Right + 8, body.Top + 44),
+                new PointF(body.Right - 10, body.Top + 53)
             });
+        }
+    }
 
-            g.FillEllipse(yellow, -88, -68, 176, 140);
-            g.DrawEllipse(outline, -88, -68, 176, 140);
-            g.FillEllipse(yellowLight, -60, -51, 81, 42);
-
-            g.FillEllipse(yellow, -68, 86, 58, 24);
-            g.DrawEllipse(outline, -68, 86, 58, 24);
-            g.FillEllipse(yellow, 10, 86, 58, 24);
-            g.DrawEllipse(outline, 10, 86, 58, 24);
-
-            g.FillEllipse(yellow, -72, 39, 39, 56);
-            g.DrawEllipse(outline, -72, 39, 39, 56);
-            g.FillEllipse(yellow, 33, 39, 39, 56);
-            g.DrawEllipse(outline, 33, 39, 39, 56);
-
-            if (mood == PetMood.Sleepy || mood == PetMood.Happy)
+    private void DrawPikaFace(Graphics g, float x, float y, Brush black, Brush red, Brush white, Brush shine, Pen detail)
+    {
+        float eyeY = y - 17;
+        if (mood == PetMood.Sleepy || mood == PetMood.Happy)
+        {
+            g.DrawArc(detail, x - 51, eyeY, 28, 22, 10, 160);
+            g.DrawArc(detail, x + 23, eyeY, 28, 22, 10, 160);
+        }
+        else
+        {
+            float eyeW = mood == PetMood.Touch ? 31 : 25;
+            float eyeH = mood == PetMood.Touch ? 41 : 35;
+            g.FillEllipse(black, x - 50, eyeY - 8, eyeW, eyeH);
+            g.FillEllipse(white, x - 43, eyeY - 1, 8, 9);
+            g.FillEllipse(black, x + 25, eyeY - 8, eyeW, eyeH);
+            g.FillEllipse(white, x + 32, eyeY - 1, 8, 9);
+            if (mood == PetMood.Thinking)
             {
-                g.DrawArc(detailPen, -52, -11, 28, 22, 10, 160);
-                g.DrawArc(detailPen, 24, -11, 28, 22, 10, 160);
-            }
-            else
-            {
-                g.FillEllipse(black, -50, -20, 25, 35);
-                g.FillEllipse(white, -43, -12, 8, 9);
-                g.FillEllipse(black, 25, -20, 25, 35);
-                g.FillEllipse(white, 32, -12, 8, 9);
-                if (mood == PetMood.Touch)
-                {
-                    g.FillEllipse(white, -48, -18, 21, 31);
-                    g.FillEllipse(black, -42, -10, 10, 18);
-                    g.FillEllipse(white, 27, -18, 21, 31);
-                    g.FillEllipse(black, 33, -10, 10, 18);
-                }
-            }
-
-            PointF[] nose =
-            {
-                new PointF(-5, 15), new PointF(5, 15), new PointF(0, 21)
-            };
-            g.FillPolygon(black, nose);
-
-            g.FillEllipse(blush, -82, 10, 49, 40);
-            g.FillEllipse(blush, 33, 10, 49, 40);
-            g.FillEllipse(red, -76, 15, 36, 30);
-            g.FillEllipse(red, 40, 15, 36, 30);
-            g.FillEllipse(cheekShine, -68, 19, 10, 7);
-            g.FillEllipse(cheekShine, 48, 19, 10, 7);
-
-            if (mood == PetMood.Touch)
-            {
-                g.FillEllipse(black, -10, 28, 20, 23);
-                g.FillEllipse(red, -5, 38, 10, 7);
-            }
-            else if (talking)
-            {
-                float h = 12 + (float)Math.Abs(Math.Sin(tick * 20)) * 8;
-                g.FillEllipse(black, -15, 29, 30, h);
-                g.FillEllipse(red, -8, 34, 16, Math.Max(4, h - 10));
-            }
-            else
-            {
-                g.DrawArc(smilePen, -21, 20, 21, 22, 8, 150);
-                g.DrawArc(smilePen, 0, 20, 21, 22, 22, 150);
+                g.FillEllipse(white, x - 42, eyeY - 4, 10, 10);
+                g.FillEllipse(white, x + 33, eyeY - 4, 10, 10);
             }
         }
 
-        DrawMoodEffects(g);
+        g.FillEllipse(red, x - 76, y + 12, 36, 30);
+        g.FillEllipse(red, x + 40, y + 12, 36, 30);
+        g.FillEllipse(shine, x - 68, y + 16, 10, 7);
+        g.FillEllipse(shine, x + 48, y + 16, 10, 7);
+        g.FillPolygon(black, new PointF[] {
+            new PointF(x - 5, y + 13), new PointF(x + 5, y + 13), new PointF(x, y + 19)
+        });
+
+        if (mood == PetMood.Touch)
+        {
+            g.FillEllipse(black, x - 11, y + 27, 22, 27);
+            g.FillEllipse(red, x - 5, y + 40, 10, 8);
+        }
+        else if (mood == PetMood.Talking)
+        {
+            float h = 20 + (float)Math.Abs(Math.Sin(tick * 20)) * 9;
+            g.FillEllipse(black, x - 17, y + 25, 34, h);
+            g.FillEllipse(red, x - 9, y + 38, 18, 9);
+        }
+        else if (mood == PetMood.Sleepy)
+        {
+            g.DrawArc(detail, x - 13, y + 22, 26, 18, 20, 140);
+        }
+        else
+        {
+            g.DrawArc(detail, x - 22, y + 20, 22, 23, 8, 150);
+            g.DrawArc(detail, x, y + 20, 22, 23, 22, 150);
+        }
+    }
+
+    private static void DrawLimb(Graphics g, Brush brush, Pen outline, RectangleF rect, float angle)
+    {
+        GraphicsState state = g.Save();
+        g.TranslateTransform(rect.Left + rect.Width / 2f, rect.Top + rect.Height / 2f);
+        g.RotateTransform(angle);
+        RectangleF local = new RectangleF(-rect.Width / 2f, -rect.Height / 2f, rect.Width, rect.Height);
+        g.FillEllipse(brush, local);
+        g.DrawEllipse(outline, local);
+        g.Restore(state);
+    }
+
+    private static void DrawTailPose(Graphics g, Brush brush, Pen outline, PetMood pose)
+    {
+        GraphicsState state = g.Save();
+        if (pose == PetMood.Happy) g.RotateTransform(-15);
+        else if (pose == PetMood.Touch) g.RotateTransform(18);
+        else if (pose == PetMood.Sleepy)
+        {
+            g.TranslateTransform(22, 55);
+            g.RotateTransform(65);
+            g.ScaleTransform(0.75f, 0.75f);
+        }
+        DrawTail(g, brush, outline);
         g.Restore(state);
     }
 
