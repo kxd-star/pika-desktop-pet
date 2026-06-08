@@ -27,9 +27,22 @@ internal static class WpfProgram
     [STAThread]
     private static void Main()
     {
-        Application app = new Application();
-        app.ShutdownMode = ShutdownMode.OnMainWindowClose;
-        app.Run(new PikaWindow());
+        try
+        {
+            Application app = new Application();
+            app.ShutdownMode = ShutdownMode.OnMainWindowClose;
+            app.DispatcherUnhandledException += delegate(object sender, DispatcherUnhandledExceptionEventArgs e)
+            {
+                Log("dispatcher-fatal:" + e.Exception);
+                e.Handled = true;
+            };
+            PikaWindow window = new PikaWindow();
+            app.Run(window);
+        }
+        catch (Exception ex)
+        {
+            Log("fatal:" + ex);
+        }
     }
 
     internal static void Log(string message)
@@ -74,6 +87,7 @@ internal sealed class PikaWindow : Window
     private readonly DispatcherTimer ambientTimer;
     private readonly Random random = new Random();
     private readonly List<ChatEntry> conversation = new List<ChatEntry>();
+    private readonly Dictionary<PikaState, BitmapImage> stateImages = new Dictionary<PikaState, BitmapImage>();
     private readonly ScaleTransform petScale = new ScaleTransform(1, 1);
     private readonly RotateTransform petRotate = new RotateTransform(0);
     private readonly TranslateTransform petMove = new TranslateTransform(0, 0);
@@ -86,6 +100,7 @@ internal sealed class PikaWindow : Window
     private DateTime previewLockedUntil = DateTime.MinValue;
     private Point dragStart;
     private Point windowStart;
+    private BitmapImage defaultPetImage;
 
     private string HistoryPath
     {
@@ -138,7 +153,7 @@ internal sealed class PikaWindow : Window
             if (!sending && !dragging && chat.Visibility != Visibility.Visible &&
                 DateTime.Now >= previewLockedUntil && state == PikaState.Idle)
             {
-                PikaState[] ambient = { PikaState.Happy, PikaState.Thinking, PikaState.Touch };
+                PikaState[] ambient = { PikaState.Thinking, PikaState.Touch };
                 SetState(ambient[random.Next(ambient.Length)], true);
             }
         };
@@ -152,7 +167,7 @@ internal sealed class PikaWindow : Window
 
         Loaded += delegate
         {
-            SetState(PikaState.Idle, false);
+            SetState(PikaState.Touch, true);
             WpfProgram.Log("wpf-ready");
         };
     }
@@ -435,7 +450,7 @@ internal sealed class PikaWindow : Window
         string local = Path.Combine(WpfProgram.AppRoot, "assets", "pikachu.png");
         if (File.Exists(local))
         {
-            SetImageSource(local);
+            LoadStateImages(local);
             return;
         }
 
@@ -452,7 +467,7 @@ internal sealed class PikaWindow : Window
                     client.Headers["User-Agent"] = "PikaDesktopPet";
                     client.DownloadFile(url, local);
                 }
-                Dispatcher.BeginInvoke((Action)delegate { SetImageSource(local); });
+                Dispatcher.BeginInvoke((Action)delegate { LoadStateImages(local); });
             }
             catch (Exception ex)
             {
@@ -461,7 +476,29 @@ internal sealed class PikaWindow : Window
         });
     }
 
-    private void SetImageSource(string path)
+    private void LoadStateImages(string defaultPath)
+    {
+        stateImages.Clear();
+        defaultPetImage = LoadBitmap(defaultPath);
+        stateImages[PikaState.Idle] = defaultPetImage;
+
+        LoadOptionalStateImage(PikaState.Happy, "pikachu-happy.png");
+        LoadOptionalStateImage(PikaState.Touch, "pikachu-touch.png");
+        LoadOptionalStateImage(PikaState.Thinking, "pikachu-thinking.png");
+        LoadOptionalStateImage(PikaState.Talking, "pikachu-talking.png");
+        LoadOptionalStateImage(PikaState.Sleepy, "pikachu-sleepy.png");
+
+        SetImageForState(state);
+    }
+
+    private void LoadOptionalStateImage(PikaState target, string fileName)
+    {
+        string path = Path.Combine(WpfProgram.AppRoot, "assets", fileName);
+        if (File.Exists(path))
+            stateImages[target] = LoadBitmap(path);
+    }
+
+    private BitmapImage LoadBitmap(string path)
     {
         BitmapImage bitmap = new BitmapImage();
         bitmap.BeginInit();
@@ -469,7 +506,25 @@ internal sealed class PikaWindow : Window
         bitmap.UriSource = new Uri(path, UriKind.Absolute);
         bitmap.EndInit();
         bitmap.Freeze();
-        petImage.Source = bitmap;
+        return bitmap;
+    }
+
+    private void SetImageForState(PikaState target)
+    {
+        BitmapImage image;
+        if (stateImages.TryGetValue(target, out image))
+        {
+            petImage.Source = image;
+            return;
+        }
+
+        if (defaultPetImage != null)
+            petImage.Source = defaultPetImage;
+    }
+
+    private bool HasStateImage(PikaState target)
+    {
+        return stateImages.ContainsKey(target);
     }
 
     private void ToggleChat(bool visible)
@@ -519,6 +574,7 @@ internal sealed class PikaWindow : Window
         state = next;
         if (next != PikaState.Sleepy) lastInteraction = DateTime.Now;
         ClearEffects();
+        SetImageForState(next);
         petImage.BeginAnimation(UIElement.OpacityProperty, null);
         petMove.BeginAnimation(TranslateTransform.XProperty, null);
         petMove.BeginAnimation(TranslateTransform.YProperty, null);
@@ -556,31 +612,52 @@ internal sealed class PikaWindow : Window
         }
         else if (next == PikaState.Thinking)
         {
-            petRotate.Angle = -15;
-            petMove.X = -22;
-            petMove.Y = 12;
-            petScale.ScaleX = petScale.ScaleY = 0.96;
-            AddThought();
+            if (HasStateImage(PikaState.Thinking))
+            {
+                petRotate.Angle = -4;
+                petMove.X = -6;
+                petMove.Y = 3;
+                petScale.ScaleX = petScale.ScaleY = 0.98;
+            }
+            else
+            {
+                petRotate.Angle = -15;
+                petMove.X = -22;
+                petMove.Y = 12;
+                petScale.ScaleX = petScale.ScaleY = 0.96;
+                AddThought();
+            }
             ShowStateBadge(next, sending ? 30 : 4);
             if (!sending) ReturnToIdleLater(4.0, version);
         }
         else if (next == PikaState.Talking)
         {
-            petRotate.Angle = 5;
+            petRotate.Angle = HasStateImage(PikaState.Talking) ? 2 : 5;
             AnimateBothScale(1.02, 1.1, 0.23, true);
             AnimateMoveY(0, -8, 0.23, true);
-            AddSpeechDots();
+            if (!HasStateImage(PikaState.Talking)) AddSpeechDots();
             ShowStateBadge(next, 3);
             ReturnToIdleLater(3.0, version);
         }
         else if (next == PikaState.Sleepy)
         {
-            petRotate.Angle = 65;
-            petMove.X = 25;
-            petMove.Y = 42;
-            petScale.ScaleX = petScale.ScaleY = 0.8;
-            AnimateBothScale(0.8, 0.82, 2.2, true);
-            AddSleep();
+            if (HasStateImage(PikaState.Sleepy))
+            {
+                petRotate.Angle = 0;
+                petMove.X = 6;
+                petMove.Y = 15;
+                petScale.ScaleX = petScale.ScaleY = 0.9;
+                AnimateBothScale(0.9, 0.92, 2.2, true);
+            }
+            else
+            {
+                petRotate.Angle = 65;
+                petMove.X = 25;
+                petMove.Y = 42;
+                petScale.ScaleX = petScale.ScaleY = 0.8;
+                AnimateBothScale(0.8, 0.82, 2.2, true);
+                AddSleep();
+            }
             ShowStateBadge(next, 6);
             if (DateTime.Now >= previewLockedUntil) ReturnToIdleLater(6.0, version);
         }
