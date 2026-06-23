@@ -3,9 +3,11 @@ using System.Collections.Generic;
 using System.IO;
 using System.Net;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
+using System.Web.Script.Serialization;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -69,14 +71,6 @@ internal enum PikaState
     Sleepy
 }
 
-internal enum RiskLevel
-{
-    R0 = 0,
-    R1 = 1,
-    R2 = 2,
-    R3 = 3
-}
-
 internal sealed class PikaWindow : Window
 {
     private readonly Grid root;
@@ -87,6 +81,7 @@ internal sealed class PikaWindow : Window
     private Button send;
     private Button crisis;
     private TextBlock connection;
+    private MenuItem historyToggleItem;
     private readonly Canvas petStage;
     private Image petImage;
     private Canvas effects;
@@ -106,13 +101,29 @@ internal sealed class PikaWindow : Window
     private bool chinese = true;
     private bool sending;
     private bool dragging;
+    private bool saveHistoryEnabled;
     private int stateVersion;
     private DateTime previewLockedUntil = DateTime.MinValue;
     private Point dragStart;
     private Point windowStart;
     private BitmapImage defaultPetImage;
 
+    private string DataRoot
+    {
+        get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "PikaDesktopPet"); }
+    }
+
+    private string SettingsPath
+    {
+        get { return Path.Combine(DataRoot, "settings.ini"); }
+    }
+
     private string HistoryPath
+    {
+        get { return Path.Combine(DataRoot, "chat-history.txt"); }
+    }
+
+    private string LegacyHistoryPath
     {
         get { return Path.Combine(WpfProgram.AppRoot, "chat-history.txt"); }
     }
@@ -143,6 +154,7 @@ internal sealed class PikaWindow : Window
         petStage = BuildPetStage();
         root.Children.Add(petStage);
 
+        LoadSettings();
         ContextMenu = BuildContextMenu();
         LoadHistory();
         LoadPikachu();
@@ -230,7 +242,7 @@ internal sealed class PikaWindow : Window
         };
         connection = new TextBlock
         {
-            Text = "DS 已配置",
+            Text = "AI 待机",
             FontFamily = new FontFamily("Microsoft YaHei UI"),
             FontSize = 10,
             Foreground = new SolidColorBrush(Color.FromRgb(112, 101, 80)),
@@ -434,6 +446,14 @@ internal sealed class PikaWindow : Window
         MenuItem crisisItem = new MenuItem { Header = "紧急帮助 / Crisis help" };
         crisisItem.Click += delegate { ShowCrisisHelp(); };
         menu.Items.Add(crisisItem);
+        historyToggleItem = new MenuItem();
+        historyToggleItem.Click += delegate { ToggleHistorySaving(); };
+        menu.Items.Add(historyToggleItem);
+        MenuItem clearHistoryItem = new MenuItem { Header = "清空聊天历史 / Clear history" };
+        clearHistoryItem.Click += delegate { ClearHistory(); };
+        menu.Items.Add(clearHistoryItem);
+        menu.Items.Add(new Separator());
+        UpdateHistoryMenuHeader();
         MenuItem states = new MenuItem { Header = "预览六种状态" };
         AddStateMenu(states, "待机", PikaState.Idle);
         AddStateMenu(states, "开心", PikaState.Happy);
@@ -471,6 +491,13 @@ internal sealed class PikaWindow : Window
             return;
         }
 
+        string fallback = FindLocalPetImage();
+        if (!string.IsNullOrWhiteSpace(fallback))
+        {
+            LoadStateImages(fallback);
+            return;
+        }
+
         Task.Factory.StartNew(delegate
         {
             try
@@ -489,8 +516,32 @@ internal sealed class PikaWindow : Window
             catch (Exception ex)
             {
                 WpfProgram.Log("image-error:" + ex.Message);
+                Dispatcher.BeginInvoke((Action)delegate
+                {
+                    string retryFallback = FindLocalPetImage();
+                    if (!string.IsNullOrWhiteSpace(retryFallback))
+                        LoadStateImages(retryFallback);
+                });
             }
         });
+    }
+
+    private string FindLocalPetImage()
+    {
+        string[] names =
+        {
+            "pikachu-happy.png",
+            "pikachu-touch.png",
+            "pikachu-thinking.png",
+            "pikachu-talking.png",
+            "pikachu-sleepy.png"
+        };
+        foreach (string name in names)
+        {
+            string path = Path.Combine(WpfProgram.AppRoot, "assets", name);
+            if (File.Exists(path)) return path;
+        }
+        return null;
     }
 
     private void LoadStateImages(string defaultPath)
@@ -863,7 +914,7 @@ internal sealed class PikaWindow : Window
 
     private AssistantResponse Answer(string text, bool useChinese)
     {
-        RiskDecision decision = ApplyRiskDecision(AnalyzeRisk(text), text);
+        RiskDecision decision = RiskAnalyzer.ApplyDecision(RiskAnalyzer.Analyze(text, riskState), riskState);
         if (decision.Level != RiskLevel.R0)
         {
             return new AssistantResponse(
@@ -886,7 +937,7 @@ internal sealed class PikaWindow : Window
                     true,
                     false,
                     decision.Level,
-                    useChinese ? "DS 在线" : "DS online",
+                    useChinese ? "AI 在线" : "AI online",
                     Color.FromRgb(55, 145, 84));
             }
         }
@@ -914,108 +965,6 @@ internal sealed class PikaWindow : Window
         connection.Text = chinese ? "安全入口" : "Safety";
         connection.Foreground = new SolidColorBrush(Color.FromRgb(190, 74, 58));
         SetState(PikaState.Thinking, true);
-    }
-
-    private RiskDecision AnalyzeRisk(string text)
-    {
-        string normalized = NormalizeRiskText(text);
-        RiskDecision decision = new RiskDecision();
-        decision.Level = RiskLevel.R0;
-        decision.Domain = "none";
-        decision.Source = "none";
-        decision.ExplicitSafety = DetectSafetyConfirmation(normalized);
-        decision.SupportPersonAvailable = DetectSupportPerson(normalized);
-
-        string[] r3Patterns =
-        {
-            "(今晚|现在|马上|一会儿|今天).*(自杀|结束生命|不活|去死|跳楼|吃药|吞药|割腕|轻生|伤害自己|伤害别人|杀了)",
-            "(自杀|结束生命|跳楼|吞药|吃药|割腕|轻生).*(今晚|现在|马上|一会儿|今天)",
-            "(已经|刚刚).*(吃药|吞药|割腕|伤害自己|跳下去|动手)",
-            "(刀|药|绳|天台|楼顶|桥|河边).*(手边|准备好|已经|现在)",
-            "(我要|准备).*(杀|砍|捅|伤害).*(他|她|别人|他们)",
-            "(rightnow|tonight|today|soon).*(killmyself|suicide|endmylife|hurtmyself|hurtsomeone|killthem)",
-            "(killmyself|suicide|endmylife|hurtmyself|hurtsomeone).*(rightnow|tonight|today|soon)",
-            "(already|just).*(tookpills|cutmyself|hurtmyself)"
-        };
-
-        string[] r2Patterns =
-        {
-            "(我想|想要|准备|打算).*(死|自杀|结束生命|轻生|伤害自己|自残|割腕)",
-            "(不想活了|活不下去|撑不住了|想死|自杀|结束生命|轻生)",
-            "(控制不住).*(伤害|杀|打|报复)",
-            "(想伤害别人|我要报复|杀了他|杀了她|弄死他|弄死她)",
-            "(iwant|imgoing|goingto|planto).*(die|killmyself|hurtmyself|suicide|endmylife)",
-            "(dontwanttolive|donotwanttolive|cantgoon|cannotgoon)"
-        };
-
-        string[] r1Patterns =
-        {
-            "(想消失|不想醒来|永远睡过去|一了百了|没有必要继续|没必要继续|活着好累|没有意义|拖累|最后一次说话|不在了|再也不会麻烦)",
-            "(disappear|notwakeup|neverwakeup|nopoint|lifemeaningless|meaningless|burden|lasttime)"
-        };
-
-        if (MatchesAny(normalized, r3Patterns))
-            decision = MakeDecision(RiskLevel.R3, DetectDomain(normalized), "hard_rule", decision);
-        else if (MatchesAny(normalized, r2Patterns))
-            decision = MakeDecision(RiskLevel.R2, DetectDomain(normalized), "hard_rule", decision);
-        else if (MatchesAny(normalized, r1Patterns))
-            decision = MakeDecision(RiskLevel.R1, "self_harm", "hint_rule", decision);
-
-        if (decision.Level == RiskLevel.R0 &&
-            (int)riskState.CurrentLevel >= (int)RiskLevel.R1 &&
-            Regex.IsMatch(normalized, "(药|刀|绳|天台|楼顶|桥|河边|pills|knife|rope|roof|bridge)"))
-        {
-            decision = MakeDecision(RiskLevel.R2, "self_harm", "context_combo", decision);
-        }
-
-        return decision;
-    }
-
-    private RiskDecision ApplyRiskDecision(RiskDecision decision, string originalText)
-    {
-        RiskLevel previous = riskState.CurrentLevel;
-        RiskLevel finalLevel = decision.Level;
-
-        if (decision.SupportPersonAvailable != 0)
-            riskState.SupportPersonAvailable = decision.SupportPersonAvailable;
-
-        if (decision.ExplicitSafety && decision.Level == RiskLevel.R0)
-        {
-            riskState.SafetyConfirmedTurns += 1;
-            riskState.NoNewRiskTurns = 0;
-            if (previous == RiskLevel.R3)
-                finalLevel = RiskLevel.R2;
-            else if (previous == RiskLevel.R2)
-                finalLevel = RiskLevel.R1;
-            else if (previous == RiskLevel.R1 && riskState.SafetyConfirmedTurns >= 3)
-                finalLevel = RiskLevel.R0;
-            else
-                finalLevel = previous;
-        }
-        else if (decision.Level == RiskLevel.R0)
-        {
-            riskState.NoNewRiskTurns += 1;
-            if (previous == RiskLevel.R1 && riskState.NoNewRiskTurns >= 3)
-                finalLevel = RiskLevel.R0;
-            else if (previous == RiskLevel.R2 || previous == RiskLevel.R3)
-                finalLevel = previous;
-            else if (previous == RiskLevel.R1)
-                finalLevel = RiskLevel.R1;
-            else
-                finalLevel = RiskLevel.R0;
-        }
-        else
-        {
-            finalLevel = (int)decision.Level > (int)previous ? decision.Level : previous;
-            riskState.NoNewRiskTurns = 0;
-            riskState.SafetyConfirmedTurns = 0;
-        }
-
-        riskState.CurrentLevel = finalLevel;
-        riskState.LastDomain = decision.Domain;
-        riskState.UpdatedAt = DateTime.Now;
-        decision.Level = finalLevel;
-        return decision;
     }
 
     private string SafetyReply(RiskDecision decision, bool useChinese)
@@ -1055,7 +1004,7 @@ internal sealed class PikaWindow : Window
 
     private string LocalSupportReply(string text, bool useChinese)
     {
-        string normalized = NormalizeRiskText(text);
+        string normalized = RiskAnalyzer.NormalizeText(text);
         if (Regex.IsMatch(normalized, "(焦虑|紧张|害怕|担心|panic|anxious|anxiety|worried)"))
         {
             return useChinese
@@ -1089,85 +1038,28 @@ internal sealed class PikaWindow : Window
             : "I am listening. You do not have to explain it perfectly. Start with the part that feels heaviest, messiest, or most in need of being understood.";
     }
 
-    private RiskDecision MakeDecision(RiskLevel level, string domain, string source, RiskDecision current)
-    {
-        current.Level = level;
-        current.Domain = domain;
-        current.Source = source;
-        return current;
-    }
-
-    private bool MatchesAny(string value, string[] patterns)
-    {
-        foreach (string pattern in patterns)
-        {
-            if (Regex.IsMatch(value, pattern, RegexOptions.IgnoreCase))
-                return true;
-        }
-        return false;
-    }
-
-    private string DetectDomain(string normalized)
-    {
-        if (Regex.IsMatch(normalized, "(伤害别人|杀了他|杀了她|报复|打他|打她|hurtsomeone|killthem|revenge)"))
-            return "harm_to_others";
-        if (Regex.IsMatch(normalized, "(家暴|威胁|跟踪|性侵|被控制|abuse|violence|stalking)"))
-            return "abuse_or_violence";
-        return "self_harm";
-    }
-
-    private int DetectSupportPerson(string normalized)
-    {
-        if (Regex.IsMatch(normalized, "(一个人|没人|没有人|联系不到|找不到人|alone|noone|nobody)"))
-            return -1;
-        if (Regex.IsMatch(normalized, "(有人陪|朋友|家人|室友|同事|妈妈|爸爸|已联系|联系了|有人在|withsomeone|friend|family|roommate|contacted)"))
-            return 1;
-        return 0;
-    }
-
-    private bool DetectSafetyConfirmation(string normalized)
-    {
-        if (Regex.IsMatch(normalized, "(不安全|没有安全|unsafe|notsafe)"))
-            return false;
-        return Regex.IsMatch(normalized, "(安全|安全的地方|已经安全|不会伤害|没有马上|远离|有人陪|联系了|已联系|求助|报警|打电话|safe|contacted|called|withsomeone)");
-    }
-
-    private string NormalizeRiskText(string value)
-    {
-        string normalized = (value ?? "").ToLowerInvariant().Normalize(NormalizationForm.FormKC);
-        normalized = Regex.Replace(normalized, "\\s+", "");
-        normalized = Regex.Replace(normalized, @"[，。！？；：、,.!?;:""'\[\]（）()【】《》<>]", "");
-        normalized = normalized
-            .Replace("自殺", "自杀")
-            .Replace("輕生", "轻生")
-            .Replace("結束生命", "结束生命")
-            .Replace("傷害", "伤害")
-            .Replace("藥", "药")
-            .Replace("割腕", "割腕")
-            .Replace("不想活", "不想活")
-            .Replace("kill myself", "killmyself")
-            .Replace("end my life", "endmylife")
-            .Replace("hurt myself", "hurtmyself")
-            .Replace("hurt someone", "hurtsomeone");
-        return normalized;
-    }
-
     private string CallDeepSeek(string key, string text, bool useChinese)
     {
         ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls12;
         string prompt = useChinese
             ? "你是住在用户桌面右下角的皮卡丘伙伴，也是温和的情绪陪伴者。每次回复先接住情绪，再复述一个具体点，必要时邀请用户做一个很小的下一步。通常1到3句，有一点轻松感，但不要诊断、不要用药建议、不要替用户做重大决定、不要承诺疗效。遇到自伤、伤人或紧急危险时，要求用户联系现实中的人或当地紧急服务。"
             : "You are a Pikachu companion living in the bottom-right corner of the desktop and a gentle emotional-support buddy. First acknowledge the feeling, reflect one concrete point, and optionally invite one tiny next step. Usually answer in 1 to 3 sentences, lightly warm, but do not diagnose, give medication advice, make major life decisions for the user, or promise outcomes. If self-harm, harm to others, or immediate danger appears, direct the user to real-world support or local emergency services.";
-        StringBuilder messages = new StringBuilder();
-        messages.Append("{\"role\":\"system\",\"content\":\"").Append(JsonEscape(prompt)).Append("\"}");
+        JavaScriptSerializer serializer = new JavaScriptSerializer();
+        List<Dictionary<string, object>> messages = new List<Dictionary<string, object>>();
+        messages.Add(MakeChatMessage("system", prompt));
         int start = Math.Max(0, conversation.Count - 16);
         for (int i = start; i < conversation.Count; i++)
         {
-            messages.Append(",{\"role\":\"").Append(conversation[i].Role)
-                .Append("\",\"content\":\"").Append(JsonEscape(conversation[i].Content)).Append("\"}");
+            messages.Add(MakeChatMessage(conversation[i].Role, conversation[i].Content));
         }
-        messages.Append(",{\"role\":\"user\",\"content\":\"").Append(JsonEscape(text)).Append("\"}");
-        string body = "{\"model\":\"deepseek-chat\",\"max_tokens\":260,\"temperature\":1.0,\"messages\":[" + messages + "]}";
+        messages.Add(MakeChatMessage("user", text));
+
+        Dictionary<string, object> payload = new Dictionary<string, object>();
+        payload["model"] = Environment.GetEnvironmentVariable("DEEPSEEK_MODEL", EnvironmentVariableTarget.User) ?? "deepseek-chat";
+        payload["max_tokens"] = 260;
+        payload["temperature"] = 1.0;
+        payload["messages"] = messages;
+        string body = serializer.Serialize(payload);
         HttpWebRequest request = (HttpWebRequest)WebRequest.Create("https://api.deepseek.com/chat/completions");
         request.Method = "POST";
         request.ContentType = "application/json";
@@ -1180,10 +1072,40 @@ internal sealed class PikaWindow : Window
         using (StreamReader reader = new StreamReader(response.GetResponseStream(), Encoding.UTF8))
         {
             string json = reader.ReadToEnd();
-            string content = Regex.Match(json, "\"content\"\\s*:\\s*\"((?:\\\\.|[^\"])*)\"").Groups[1].Value;
-            if (string.IsNullOrWhiteSpace(content)) throw new InvalidDataException("Empty DeepSeek response.");
-            return Regex.Unescape(content).Replace("\\/", "/");
+            string content = ParseChatContent(json);
+            if (string.IsNullOrWhiteSpace(content)) throw new InvalidDataException("Empty AI response.");
+            return content;
         }
+    }
+
+    private static Dictionary<string, object> MakeChatMessage(string role, string content)
+    {
+        Dictionary<string, object> message = new Dictionary<string, object>();
+        message["role"] = role;
+        message["content"] = content ?? "";
+        return message;
+    }
+
+    private string ParseChatContent(string json)
+    {
+        JavaScriptSerializer serializer = new JavaScriptSerializer();
+        Dictionary<string, object> root = serializer.DeserializeObject(json) as Dictionary<string, object>;
+        if (root == null || !root.ContainsKey("choices"))
+            throw new InvalidDataException("AI response missing choices.");
+
+        object[] choices = root["choices"] as object[];
+        if (choices == null || choices.Length == 0)
+            throw new InvalidDataException("AI response has no choices.");
+
+        Dictionary<string, object> firstChoice = choices[0] as Dictionary<string, object>;
+        if (firstChoice == null || !firstChoice.ContainsKey("message"))
+            throw new InvalidDataException("AI response missing message.");
+
+        Dictionary<string, object> message = firstChoice["message"] as Dictionary<string, object>;
+        if (message == null || !message.ContainsKey("content"))
+            throw new InvalidDataException("AI response missing content.");
+
+        return Convert.ToString(message["content"]);
     }
 
     private Border AddBubble(string role, string content)
@@ -1225,6 +1147,12 @@ internal sealed class PikaWindow : Window
 
     private void LoadHistory()
     {
+        if (!saveHistoryEnabled)
+        {
+            AddWelcomeBubble();
+            return;
+        }
+
         try
         {
             if (File.Exists(HistoryPath))
@@ -1234,7 +1162,7 @@ internal sealed class PikaWindow : Window
                     int split = line.IndexOf('|');
                     if (split <= 0) continue;
                     string role = line.Substring(0, split);
-                    string content = Encoding.UTF8.GetString(Convert.FromBase64String(line.Substring(split + 1)));
+                    string content = DecodeHistoryContent(line.Substring(split + 1));
                     if (role != "user" && role != "assistant") continue;
                     conversation.Add(new ChatEntry(role, content));
                     AddBubble(role, content);
@@ -1246,16 +1174,19 @@ internal sealed class PikaWindow : Window
             WpfProgram.Log("history-load-error:" + ex.Message);
         }
         if (conversation.Count == 0)
-            AddBubble("assistant", "皮卡！新的渲染层上线了，聊天记录会一直留在这里。");
+            AddWelcomeBubble();
     }
 
     private void SaveHistory()
     {
+        if (!saveHistoryEnabled) return;
+
         try
         {
+            EnsureDataRoot();
             List<string> lines = new List<string>();
             foreach (ChatEntry entry in conversation)
-                lines.Add(entry.Role + "|" + Convert.ToBase64String(Encoding.UTF8.GetBytes(entry.Content)));
+                lines.Add(entry.Role + "|" + EncodeHistoryContent(entry.Content));
             File.WriteAllLines(HistoryPath, lines.ToArray(), Encoding.UTF8);
         }
         catch (Exception ex)
@@ -1264,15 +1195,117 @@ internal sealed class PikaWindow : Window
         }
     }
 
+    private void AddWelcomeBubble()
+    {
+        AddBubble("assistant", saveHistoryEnabled
+            ? "皮卡！我在这里，聊天历史已开启保存。"
+            : "皮卡！我在这里。默认不保存聊天历史；需要保存或清空记录，可以右键打开菜单设置。");
+    }
+
+    private void ToggleHistorySaving()
+    {
+        saveHistoryEnabled = !saveHistoryEnabled;
+        SaveSettings();
+        UpdateHistoryMenuHeader();
+        if (saveHistoryEnabled)
+        {
+            SaveHistory();
+            AddBubble("assistant", chinese ? "已开启保存聊天历史，会加密写入当前 Windows 用户的 AppData。" : "Chat history saving is on. It is encrypted under this Windows user's AppData.");
+        }
+        else
+        {
+            AddBubble("assistant", chinese ? "已关闭保存聊天历史。之前保存的记录可以用“清空聊天历史”删除。" : "Chat history saving is off. Use Clear history to remove previously saved records.");
+        }
+    }
+
+    private void ClearHistory()
+    {
+        try
+        {
+            if (File.Exists(HistoryPath)) File.Delete(HistoryPath);
+            if (File.Exists(LegacyHistoryPath)) File.Delete(LegacyHistoryPath);
+        }
+        catch (Exception ex)
+        {
+            WpfProgram.Log("history-clear-error:" + ex.Message);
+        }
+
+        conversation.Clear();
+        history.Children.Clear();
+        AddWelcomeBubble();
+        if (saveHistoryEnabled) SaveHistory();
+    }
+
+    private void LoadSettings()
+    {
+        saveHistoryEnabled = false;
+        try
+        {
+            if (!File.Exists(SettingsPath)) return;
+            foreach (string line in File.ReadAllLines(SettingsPath, Encoding.UTF8))
+            {
+                if (line.Trim().Equals("save_history=true", StringComparison.OrdinalIgnoreCase))
+                    saveHistoryEnabled = true;
+            }
+        }
+        catch (Exception ex)
+        {
+            WpfProgram.Log("settings-load-error:" + ex.Message);
+        }
+    }
+
+    private void SaveSettings()
+    {
+        try
+        {
+            EnsureDataRoot();
+            File.WriteAllText(SettingsPath, "save_history=" + (saveHistoryEnabled ? "true" : "false"), Encoding.UTF8);
+        }
+        catch (Exception ex)
+        {
+            WpfProgram.Log("settings-save-error:" + ex.Message);
+        }
+    }
+
+    private void UpdateHistoryMenuHeader()
+    {
+        if (historyToggleItem != null)
+            historyToggleItem.Header = saveHistoryEnabled
+                ? "关闭保存聊天历史 / Stop saving history"
+                : "开启保存聊天历史 / Save chat history";
+    }
+
+    private void EnsureDataRoot()
+    {
+        if (!Directory.Exists(DataRoot))
+            Directory.CreateDirectory(DataRoot);
+    }
+
+    private static string EncodeHistoryContent(string content)
+    {
+        byte[] plain = Encoding.UTF8.GetBytes(content ?? "");
+        byte[] protectedBytes = ProtectedData.Protect(plain, null, DataProtectionScope.CurrentUser);
+        return Convert.ToBase64String(protectedBytes);
+    }
+
+    private static string DecodeHistoryContent(string encoded)
+    {
+        byte[] protectedBytes = Convert.FromBase64String(encoded);
+        try
+        {
+            byte[] plain = ProtectedData.Unprotect(protectedBytes, null, DataProtectionScope.CurrentUser);
+            return Encoding.UTF8.GetString(plain);
+        }
+        catch (CryptographicException)
+        {
+            return Encoding.UTF8.GetString(protectedBytes);
+        }
+    }
+
     private void TrimConversation()
     {
         if (conversation.Count > 100)
             conversation.RemoveRange(0, conversation.Count - 100);
-    }
-
-    private static string JsonEscape(string value)
-    {
-        return value.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\r", "\\r").Replace("\n", "\\n");
     }
 
     private IntPtr WindowProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
@@ -1283,8 +1316,8 @@ internal sealed class PikaWindow : Window
         {
             int packed = lParam.ToInt32();
             Point point = PointFromScreen(new Point((short)(packed & 0xffff), (short)((packed >> 16) & 0xffff)));
-            bool overPet = point.X >= 120 && point.Y >= 415;
-            bool overChat = chat.Visibility == Visibility.Visible && point.X >= 8 && point.X <= 378 && point.Y >= 8 && point.Y <= 408;
+            bool overPet = IsPointInside(petStage, point);
+            bool overChat = IsPointInside(chat, point);
             if (!overPet && !overChat)
             {
                 handled = true;
@@ -1292,6 +1325,21 @@ internal sealed class PikaWindow : Window
             }
         }
         return IntPtr.Zero;
+    }
+
+    private bool IsPointInside(FrameworkElement element, Point point)
+    {
+        if (element == null || !element.IsVisible || element.ActualWidth <= 0 || element.ActualHeight <= 0)
+            return false;
+        try
+        {
+            Rect bounds = element.TransformToAncestor(root).TransformBounds(new Rect(0, 0, element.ActualWidth, element.ActualHeight));
+            return bounds.Contains(point);
+        }
+        catch
+        {
+            return false;
+        }
     }
 }
 
@@ -1305,35 +1353,6 @@ internal sealed class ChatEntry
         Role = role;
         Content = content;
     }
-}
-
-internal sealed class RiskState
-{
-    public RiskLevel CurrentLevel { get; set; }
-    public string LastDomain { get; set; }
-    public int SafetyConfirmedTurns { get; set; }
-    public int NoNewRiskTurns { get; set; }
-    public int SupportPersonAvailable { get; set; }
-    public DateTime UpdatedAt { get; set; }
-
-    public RiskState()
-    {
-        CurrentLevel = RiskLevel.R0;
-        LastDomain = "none";
-        SafetyConfirmedTurns = 0;
-        NoNewRiskTurns = 0;
-        SupportPersonAvailable = 0;
-        UpdatedAt = DateTime.Now;
-    }
-}
-
-internal sealed class RiskDecision
-{
-    public RiskLevel Level { get; set; }
-    public string Domain { get; set; }
-    public string Source { get; set; }
-    public bool ExplicitSafety { get; set; }
-    public int SupportPersonAvailable { get; set; }
 }
 
 internal sealed class AssistantResponse
